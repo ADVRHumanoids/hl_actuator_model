@@ -1,0 +1,58 @@
+XBotInterface:
+  urdf: xacro $(ros2 pkg prefix --share hhcm_actuator_calibration)/urdf/calib_setup.urdf.xacro load_mass:=${LOAD_MASS-0} load_radius:=${LOAD_RADIUS:-0} motor_type:=${MOTOR_TYPE:-small_30}
+  srdf: xacro $(ros2 pkg prefix --share hhcm_actuator_calibration)/srdf/calib_setup.srdf.xacro
+
+
+# hal
+xbotcore_device_configs:
+  ec_idle: /home/user/xbot2_ws/src/hhcm_actuator_calibration/config/hal/ec_all.yaml
+  ec_pos: /home/user/xbot2_ws/src/hhcm_actuator_calibration/config/hal/ec_all.yaml
+
+
+# threads
+xbotcore_threads:
+    rt_main:  {sched: fifo , prio: 60, period: 0.001, core_id: 3}
+    nrt_main: {sched: other, prio: 0 , period: 0.005}
+    main: {sched: other, prio: 0 , period: 0.005, main: true, core_id: 5}
+
+
+# plugins
+xbotcore_plugins:
+
+  homing:
+    thread: rt_main
+    type: homing
+
+  ros_io:
+    thread: main
+    type: ros2_io
+    params:
+      publish_tf: true
+      publish_ros_joint_states: false
+
+  ros_control: {thread: nrt_main, type: ros2_control}
+
+  trj:
+    type: data_collection_plugin_tianhao
+    thread: rt_main
+    params:
+      amplitude: 1.0
+      freq_min: 0.1
+      freq_max: 1.0
+      period: 30.0
+      stop_time: 60.0
+      enable_log: true
+      log_file: /tmp/trajectory_log_tianhao
+      trj_out: Position  # Torque
+
+
+# global parameters
+xbotcore_param:
+  /xbot/hal/joint_safety/filter_autostart: false
+  /xbot/hal/joint_safety/filter_cutoff_hz: 2.0
+
+
+
+
+
+
