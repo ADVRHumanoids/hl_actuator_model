@@ -33,7 +33,7 @@ xbotcore_plugins:
   ros_control: {thread: nrt_main, type: ros2_control}
 
   trj:
-    type: data_collection_plugin_tianhao
+    type: data_collection_plugin_haotian
     thread: rt_main
     params:
       amplitude: 1.0
@@ -42,7 +42,7 @@ xbotcore_plugins:
       period: 30.0
       stop_time: 60.0
       enable_log: true
-      log_file: /tmp/trajectory_log_tianhao
+      log_file: /tmp/trajectory_log_haotian
       trj_out: Position  # Torque
 
 

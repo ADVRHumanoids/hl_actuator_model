@@ -391,4 +391,4 @@ void TrajectoryPlugin::Chirp::reset()
     _time = 0;
 }
 
-XBOT2_REGISTER_PLUGIN(TrajectoryPlugin, data_collection_plugin_tianhao)
+XBOT2_REGISTER_PLUGIN(TrajectoryPlugin, data_collection_plugin_haotian)

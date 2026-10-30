@@ -10,8 +10,8 @@ find_package(std_msgs REQUIRED)
 find_package(xbot2 REQUIRED)
 find_package(matlogger2 REQUIRED)
 
-add_xbot2_plugin(data_collection_plugin_tianhao src/trajectory_plugin.cpp)
-target_link_libraries(data_collection_plugin_tianhao
+add_xbot2_plugin(data_collection_plugin_haotian src/trajectory_plugin.cpp)
+target_link_libraries(data_collection_plugin_haotian
     PUBLIC 
     xbot2::xbot2_ros2_support
     std_msgs::std_msgs__rosidl_typesupport_cpp
@@ -21,7 +21,7 @@ target_link_libraries(data_collection_plugin_tianhao
 
 install(
     TARGETS 
-    data_collection_plugin_tianhao 
+    data_collection_plugin_haotian
     DESTINATION lib
     )
 
