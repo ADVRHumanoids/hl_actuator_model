@@ -36,6 +36,8 @@ bool TrajectoryPlugin::on_initialize()
         auto dev = _robot->getDeviceInstance<Hal::JointBase>(jname);
 
         _trj_map.at(dev).amplitude = a;
+
+        _enabled_joints.push_back(jname);
     }
 
     for(auto [jname, f] : freq_min)
@@ -159,7 +161,6 @@ bool TrajectoryPlugin::on_initialize()
 
     // set param with all supported joints
     setParam("~supported_joints", _enabled_joints);
-    _enabled_joints.clear();
 
     // allocate
     _model = ModelInterface::getModel(_robot->getConfigOptions());
@@ -179,10 +180,12 @@ void TrajectoryPlugin::on_start()
 
     if(_trj_out_str == "Position")
     {
+        jinfo("trajectory output set to Position");
         _trj_out = Position;
     }
     else if(_trj_out_str == "Torque")
     {
+        jinfo("trajectory output set to Torque");
         _trj_out = Torque;
     }
 
@@ -192,6 +195,8 @@ void TrajectoryPlugin::on_start()
         {
             _log_file = "/tmp/data_acquisition_plugin_log";
         }
+
+        jinfo("logging enabled, log file: {}", _log_file);
 
         MatLogger2::Options opt;
         opt.default_buffer_size = _stop_time > 0 ? std::ceil(_stop_time / getPeriodSec()) : 1e6;
@@ -221,10 +226,13 @@ void TrajectoryPlugin::on_start()
         t.reset();
         t.initial_value = j->get_pos_ref();
 
+        jinfo("initial value for joint {} set to {}", j->get_name(), t.initial_value);
+
         auto it = std::find(_enabled_joints.begin(), _enabled_joints.end(), j->get_name());
 
         if(it == _enabled_joints.end())
         {
+            jinfo("joint {} not in enabled_joints list, setting amplitude to 0", j->get_name());
             t.amplitude = 0.0;
         }
 
@@ -238,8 +246,6 @@ void TrajectoryPlugin::on_start()
             throw std::runtime_error(fmt::format("failed to set control mode for joint '{}'", j->get_name()));
         }
     }
-
-    _enabled_joints.clear();
 
     Hal::JointSafety::enable_filter(false, -1);
 }

@@ -36,11 +36,12 @@ xbotcore_plugins:
     type: data_collection_plugin_haotian
     thread: rt_main
     params:
-      amplitude: 1.0
+      amplitude: 
+        j_motor: 1.0
       freq_min: 0.1
       freq_max: 1.0
-      period: 30.0
-      stop_time: 60.0
+      period: 10.0
+      stop_time: 20.0
       enable_log: true
       log_file: /tmp/trajectory_log_haotian
       trj_out: Position  # Torque
