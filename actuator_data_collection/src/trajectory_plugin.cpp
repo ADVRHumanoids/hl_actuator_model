@@ -217,6 +217,8 @@ void TrajectoryPlugin::on_start()
         _logger->create("tau_link", nv);
         _logger->create("tau_mot", nv);
         _logger->create("tau_id", nv);
+        _logger->create("temp_mot", nv);
+        _logger->create("temp_dri", nv);
     }
 
 
@@ -347,6 +349,12 @@ void TrajectoryPlugin::run()
 
     _robot->getEffortReferenceFeedback(_tauid);
     _logger->add("tau_ref", _tauid);
+
+    _robot->getTemperatureMotor(_tauid);
+    _logger->add("temp_mot", _tauid);
+
+    _robot->getTemperatureBoard(_tauid);
+    _logger->add("temp_dri", _tauid);
 
 }
 
