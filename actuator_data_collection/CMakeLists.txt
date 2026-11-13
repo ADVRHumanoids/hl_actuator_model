@@ -12,7 +12,7 @@ find_package(matlogger2 REQUIRED)
 
 add_xbot2_plugin(data_collection_plugin_haotian src/trajectory_plugin.cpp)
 target_link_libraries(data_collection_plugin_haotian
-    PUBLIC 
+    PUBLIC
     xbot2::xbot2_ros2_support
     std_msgs::std_msgs__rosidl_typesupport_cpp
     matlogger2::matlogger2
@@ -27,11 +27,21 @@ target_link_libraries(policy_trajectory_plugin_haotian
     matlogger2::matlogger2
 )
 
+# trj_chirp：与 trj 相同的扫频正弦，但速度参考置 0；独立插件，不影响 trj
+add_xbot2_plugin(chirp_trajectory_plugin_haotian src/chirp_trajectory_plugin.cpp)
+target_link_libraries(chirp_trajectory_plugin_haotian
+    PUBLIC
+    xbot2::xbot2_ros2_support
+    std_msgs::std_msgs__rosidl_typesupport_cpp
+    matlogger2::matlogger2
+)
+
 
 install(
     TARGETS
     data_collection_plugin_haotian
     policy_trajectory_plugin_haotian
+    chirp_trajectory_plugin_haotian
     DESTINATION lib
     )
 

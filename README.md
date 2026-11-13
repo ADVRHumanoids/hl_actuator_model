@@ -1,5 +1,7 @@
 # hl_actuator_model
 
+本分支 `bench-test` 同时包含三个轨迹插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）。**同一时间只打开一个轨迹插件。** 设参数并启动可用 `actuator_data_collection/scripts/run_trj.sh <插件名> ...`。
+
 ## 策略式目标插件 `trj_policy`（试验中）
 
 `trj` 发的是平滑的扫频参考；而在机器人上，RL 策略按控制频率（如 50 Hz）发出**零阶保持、会跳变**的目标位置，且不给速度前馈。`trj_policy`（`policy_trajectory_plugin_haotian`）模拟后者，是一个独立插件，**不改 `trj` 的任何文件**，测试通过后再决定是否合并。
@@ -25,4 +27,15 @@ xbot2 plugin switch trj_policy 1
 ```bash
 g++ -std=c++17 -O2 -Wall -Wextra -pedantic actuator_data_collection/src/preview_policy.cpp -o preview_policy
 ./preview_policy 0.3 0 0.05 50 > policy.csv   # 列：time,q_ref,segment，1 ms 间隔
+## `trj_chirp`：不带速度参考的扫频正弦（试验中）
+
+复制自 `trj`（`chirp_trajectory_plugin.cpp/.h`），轨迹、参数和用法完全相同，只有一处区别：位置模式下 `set_vel_ref(0.0)`，不给速度前馈，与 RL 策略在机器人上只发目标位置的用法一致。`trj` 的文件没有改动。
+
+- 日志：`v_ref` 是实际下发的速度参考（恒为 0），新增 `v_traj` 记录正弦的解析速度；其余变量与 `trj` 相同。
+- 在线调参与 `trj` 相同，参数名前缀换成 `/trj_chirp/`，例如 `/trj_chirp/j_motor/amplitude`。
+- 不要和 `trj` 同时打开。
+
+```bash
+xbot2 plugin switch homing 1     # 回零结束后
+xbot2 plugin switch trj_chirp 1
 ```
