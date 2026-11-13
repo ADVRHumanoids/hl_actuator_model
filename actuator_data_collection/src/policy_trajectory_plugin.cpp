@@ -137,11 +137,22 @@ void PolicyTrajectoryPlugin::run()
     _robot->getJointPositionMinimal(_q);
     _robot->getJointVelocity(_v);
     _robot->getJointEffort(_tau);
+    // 安全检查。越限时绝不能 throw：rt 线程里未捕获的异常会让整个 xbot2-core terminate（core dumped）。
+    // 这里只记下原因，记录完本周期数据后停止插件；参考保持上一周期的值，不会触发 HAL 的变化率检查。
     // 跟踪误差包含目标阶跃本身（最多 max_step）和执行器的跟踪滞后，阈值要留出余量。
-    if(!std::isfinite(_q(_idx)) || !std::isfinite(_v(_idx)) || !std::isfinite(_tau(_idx)) ||
-       _q(_idx) < _q_min || _q(_idx) > _q_max || std::abs(_v(_idx)) > _max_velocity ||
-       std::abs(_tau(_idx)) > _max_link_torque || std::abs(_q(_idx) - _q_ref(_idx)) > _max_tracking_error)
-        throw std::runtime_error("policy experiment telemetry exceeded configured limits");
+    const double q = _q(_idx), v = _v(_idx), tau = _tau(_idx), e = q - _q_ref(_idx);
+    std::string violation;
+    if(!std::isfinite(q) || !std::isfinite(v) || !std::isfinite(tau))
+        violation = fmt::format("nonfinite telemetry: q {} v {} tau_link {}", q, v, tau);
+    else if(q < _q_min || q > _q_max)
+        violation = fmt::format("position {} outside [{}, {}] rad", q, _q_min, _q_max);
+    else if(std::abs(v) > _max_velocity)
+        violation = fmt::format("|velocity| {} > max_velocity {} rad/s", std::abs(v), _max_velocity);
+    else if(std::abs(tau) > _max_link_torque)
+        violation = fmt::format("|tau_link| {} > max_link_torque {} Nm", std::abs(tau), _max_link_torque);
+    else if(std::abs(e) > _max_tracking_error)
+        violation = fmt::format("|q - q_ref| {} > max_tracking_error {} rad (q {}, q_ref {})",
+                                std::abs(e), _max_tracking_error, q, _q_ref(_idx));
     // 先记录当前反馈和上一周期已下发的指令（q_ref 限速后、q_target 限速前）；第一行 valid=0。
     if(_logger) {
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - _clock_start).count();
@@ -169,6 +180,11 @@ void PolicyTrajectoryPlugin::run()
         _logger->add("temp_mot", _tau);
         _robot->getTemperatureBoard(_tau);
         _logger->add("temp_dri", _tau);
+    }
+    if(!violation.empty()) {
+        jinfo("SAFETY STOP trj_policy at t = {} s: {}", _elapsed, violation);
+        stop();
+        return;
     }
     // 发出终点目标（= q0）后再多记录一个周期。
     if(_elapsed > _stop_time + getPeriodSec()/2) { stop(); return; }

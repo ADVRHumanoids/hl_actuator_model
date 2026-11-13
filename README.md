@@ -8,6 +8,7 @@
 - XBot2 HAL 要求 d(pos_ref)/dt ≤ 20 rad/s，1 kHz 下一次跳 0.05 rad 就是 50 rad/s，会触发安全停止。所以实际下发的参考以 `max_ref_rate`（默认 15 rad/s）向策略目标移动：0.05 rad 的跳变约 3.3 ms 走完，仍在下一次策略更新（20 ms）之前到达。日志里 `q_target` 是策略目标，`q_ref` 是限速后实际下发的参考。
 - 只下发目标位置，速度参考恒为 0。默认在实验期间关闭 joint_safety 参考滤波，结束后恢复（`disable_reference_filter`，与 `trj` 相同）。
 - 同一 `seed` 在 Windows 预览和台架上生成完全相同的目标序列；每次实验换一个 seed。
+- 运行中越限时插件打印 `SAFETY STOP trj_policy ...`（哪一项、实际值、阈值），写出已采数据后停止；参考保持上一周期的值，xbot2-core 不受影响。
 - 启动前必须在 `config/xbot2_config.yaml` 填 `max_velocity`、`max_link_torque`、`max_tracking_error`（为 0 时拒绝启动，但不影响 xbot2-core 和 `trj`）；还要求 q0 ± A 在位置限内，且 `max_step × policy_rate_hz ≤ max_velocity`。
 - 日志名不要带点（如 `A0.1` 写成 `A010`）：MatLogger2 会把点后面当扩展名，只接受 `.mat` 或无扩展名。
 - 日志（默认 `/tmp/policy_targets`）的变量与 `trj` 相同，另有：`segment`（0 停留、1 斜坡、2 阶跃）、`policy_index`，以及只记一次的 `cfg_*`（种子、幅值、频率、`max_step`、q0、是否关滤波）。
