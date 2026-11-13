@@ -66,9 +66,9 @@ xbotcore_plugins:
       stop_time: 60.0             # 整段时长 s，含两端过渡。可在线调。
       position_min: -1.5707963267948966
       position_max: 1.5707963267948966
-      max_velocity: 0.0           # 必填：输出 rad/s 上限，同时用于实测速度检查。
-      max_link_torque: 0.0        # 必填：输出端力矩传感器 N·m 阈值。
-      max_tracking_error: 0.0     # 必填：|q - 目标| 阈值 rad，含目标阶跃本身（最多 max_step）。
+      max_velocity: 3.0           # 输出 rad/s 上限，同时用于实测速度检查；须 >= max_step*policy_rate_hz = 2.5。
+      max_link_torque: 30.0       # 输出端力矩传感器 N·m 阈值；按配重重力矩 m*g*r 留余量，远低于约 100 N·m 的饱和。
+      max_tracking_error: 0.3     # |q - 目标| 阈值 rad，含目标阶跃本身（最多 max_step）和跟踪滞后。
       disable_reference_filter: true  # 实验期间关闭 joint_safety 参考滤波，结束后恢复（与 trj 相同）。
       enable_log: true
       log_file: /tmp/policy_targets
