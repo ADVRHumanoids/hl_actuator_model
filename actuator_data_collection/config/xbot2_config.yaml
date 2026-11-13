@@ -56,7 +56,7 @@ xbotcore_plugins:
       amplitude: 0.3              # A，目标相对 q0 的最大偏移，输出端 rad。可在线调。
       policy_rate_hz: 50.0        # 与 RL 策略的控制频率一致；目标在两次更新之间保持不变。
       max_step: 0.05              # 相邻两次目标的最大变化 rad；max_step*policy_rate_hz 不能超过 max_velocity。
-      max_ref_rate: 15.0          # 下发参考的最大变化率 rad/s；须 < 20（XBot2 HAL 的 d(pos_ref)/dt 限制），且 >= max_step*policy_rate_hz。
+      max_ref_rate: 8.0           # 下发参考的最大变化率 rad/s；须 < 20（XBot2 HAL 的 d(pos_ref)/dt 限制，按实际周期计算，留足抖动余量），且 >= max_step*policy_rate_hz。
       step_probability: 0.4       # 用阶跃到达下一个航点的概率，其余用线性斜坡。
       dwell_min: 0.2              # 航点停留时间范围 s；停留时带载保持，产生"误差大、速度小"的样本。
       dwell_max: 1.5
