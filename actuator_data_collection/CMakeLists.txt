@@ -18,10 +18,20 @@ target_link_libraries(data_collection_plugin_haotian
     matlogger2::matlogger2
 )
 
+# 策略式目标插件（trj_policy），与上面的 trj 完全独立
+add_xbot2_plugin(policy_trajectory_plugin_haotian src/policy_trajectory_plugin.cpp)
+target_link_libraries(policy_trajectory_plugin_haotian
+    PUBLIC
+    xbot2::xbot2_ros2_support
+    std_msgs::std_msgs__rosidl_typesupport_cpp
+    matlogger2::matlogger2
+)
+
 
 install(
-    TARGETS 
+    TARGETS
     data_collection_plugin_haotian
+    policy_trajectory_plugin_haotian
     DESTINATION lib
     )
 

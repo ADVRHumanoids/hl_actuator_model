@@ -46,6 +46,33 @@ xbotcore_plugins:
       log_file: /tmp/trajectory_log_haotian
       trj_out: Position  # Torque
 
+  # 策略式目标：独立插件，与 trj 互不影响；用 `xbot2 plugin switch trj_policy 1` 启动。
+  # 不要和 trj 同时打开。阈值为 0 时 on_start 拒绝启动，但不影响 xbot2-core 和其他插件加载。
+  trj_policy:
+    type: policy_trajectory_plugin_haotian
+    thread: rt_main
+    params:
+      joint: j_motor
+      amplitude: 0.3              # A，目标相对 q0 的最大偏移，输出端 rad。可在线调。
+      policy_rate_hz: 50.0        # 与 RL 策略的控制频率一致；目标在两次更新之间保持不变。
+      max_step: 0.05              # 相邻两次目标的最大变化 rad；max_step*policy_rate_hz 不能超过 max_velocity。
+      step_probability: 0.4       # 用阶跃到达下一个航点的概率，其余用线性斜坡。
+      dwell_min: 0.2              # 航点停留时间范围 s；停留时带载保持，产生"误差大、速度小"的样本。
+      dwell_max: 1.5
+      ramp_min: 0.1               # 斜坡用时范围 s，决定跟踪段的速度分布。
+      ramp_max: 1.0
+      warmup_time: 5.0            # 开头/结尾幅值渐入渐出 s。
+      seed: 0.0                   # 随机种子；每次实验换一个，可在线调。
+      stop_time: 60.0             # 整段时长 s，含两端过渡。可在线调。
+      position_min: -1.5707963267948966
+      position_max: 1.5707963267948966
+      max_velocity: 0.0           # 必填：输出 rad/s 上限，同时用于实测速度检查。
+      max_link_torque: 0.0        # 必填：输出端力矩传感器 N·m 阈值。
+      max_tracking_error: 0.0     # 必填：|q - 目标| 阈值 rad，含目标阶跃本身（最多 max_step）。
+      disable_reference_filter: true  # 实验期间关闭 joint_safety 参考滤波，结束后恢复（与 trj 相同）。
+      enable_log: true
+      log_file: /tmp/policy_targets
+
 
 # global parameters
 xbotcore_param:
