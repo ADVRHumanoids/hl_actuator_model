@@ -8,6 +8,7 @@
 - 只下发目标位置，速度参考恒为 0。默认在实验期间关闭 joint_safety 参考滤波，结束后恢复（`disable_reference_filter`，与 `trj` 相同）。
 - 同一 `seed` 在 Windows 预览和台架上生成完全相同的目标序列；每次实验换一个 seed。
 - 启动前必须在 `config/xbot2_config.yaml` 填 `max_velocity`、`max_link_torque`、`max_tracking_error`（为 0 时拒绝启动，但不影响 xbot2-core 和 `trj`）；还要求 q0 ± A 在位置限内，且 `max_step × policy_rate_hz ≤ max_velocity`。
+- 日志名不要带点（如 `A0.1` 写成 `A010`）：MatLogger2 会把点后面当扩展名，只接受 `.mat` 或无扩展名。
 - 日志（默认 `/tmp/policy_targets`）的变量与 `trj` 相同，另有：`segment`（0 停留、1 斜坡、2 阶跃）、`policy_index`，以及只记一次的 `cfg_*`（种子、幅值、频率、`max_step`、q0、是否关滤波）。
 
 台架上运行（编译后，xbot2-core 用同一个 `xbot2_config.yaml` 启动；不要和 `trj` 同时打开）：

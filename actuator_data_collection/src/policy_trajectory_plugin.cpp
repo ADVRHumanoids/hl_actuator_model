@@ -80,19 +80,9 @@ void PolicyTrajectoryPlugin::on_start()
     _q_ref(_idx) = _gen.initial_value;
     _active.setZero();
     _active(_idx) = 1;
-    std::map<std::string, ControlMode> modes;
-    modes[_joint_name] = ControlMode::Position();
-    if(!_robot->setControlMode(modes))
-        throw std::runtime_error("failed to set position control mode");
-    // 阶跃目标经过 2 Hz 参考滤波后就不是阶跃了；默认像上游 trj 一样在实验期间关掉滤波，结束后恢复。
-    // 若机器人部署时也开着这个滤波，应设 disable_reference_filter: false，让网络把滤波一起辨识进去。
-    if(_disable_reference_filter) {
-        Hal::JointSafety::enable_filter(false, -1);
-        _filter_disabled = true;
-    }
-    _elapsed = 0;
-    _have_command = false;
-    _clock_start = std::chrono::steady_clock::now();
+    // 先建日志：MakeLogger 会因文件名不合法抛出（例如名字里带点 "A0.1"，MatLogger2 只接受 .mat 或无扩展名）。
+    // 放在切换控制模式、关滤波之前，启动失败时台架状态不变。
+    _logger.reset();
     if(_enable_log) {
         if(_log_file.empty()) _log_file = "/tmp/policy_targets";
         jinfo("logging enabled, log file: {}", _log_file);
@@ -110,11 +100,24 @@ void PolicyTrajectoryPlugin::on_start()
                 {"cfg_seed", _seed}, {"cfg_amplitude", _gen.amplitude},
                 {"cfg_policy_rate_hz", _gen.policy_rate_hz}, {"cfg_max_step", _gen.max_step},
                 {"cfg_initial_value", _gen.initial_value},
-                {"cfg_reference_filter_disabled", _filter_disabled ? 1.0 : 0.0}}) {
+                {"cfg_reference_filter_disabled", _disable_reference_filter ? 1.0 : 0.0}}) {
             _logger->create(name, 1);
             _logger->add(name, value);
         }
     }
+    std::map<std::string, ControlMode> modes;
+    modes[_joint_name] = ControlMode::Position();
+    if(!_robot->setControlMode(modes))
+        throw std::runtime_error("failed to set position control mode");
+    // 阶跃目标经过 2 Hz 参考滤波后就不是阶跃了；默认像上游 trj 一样在实验期间关掉滤波，结束后恢复。
+    // 若机器人部署时也开着这个滤波，应设 disable_reference_filter: false，让网络把滤波一起辨识进去。
+    if(_disable_reference_filter) {
+        Hal::JointSafety::enable_filter(false, -1);
+        _filter_disabled = true;
+    }
+    _elapsed = 0;
+    _have_command = false;
+    _clock_start = std::chrono::steady_clock::now();
 }
 void PolicyTrajectoryPlugin::starting() { start_completed(); }
 
