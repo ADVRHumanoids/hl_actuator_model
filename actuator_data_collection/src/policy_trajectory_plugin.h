@@ -35,6 +35,10 @@ private:
     double _stop_time = 60, _elapsed = 0, _seed = 0;
     // 输出端安全阈值；为 0 表示未配置，不能启动。
     double _q_min = 0, _q_max = 0, _max_velocity = 0, _max_link_torque = 0, _max_tracking_error = 0;
+    // 下发参考的最大变化率 rad/s：XBot2 HAL 会拒绝 d(pos_ref)/dt > 20 rad/s，阶跃目标按此速率在几毫秒内走完。
+    double _max_ref_rate = 15.0;
+    double _q_target = 0;                // 当前策略目标（限速前），单独记日志。
+    int _k_cmd = 0;                      // 上一条指令对应的策略目标下标。
     bool _enable_log = true, _disable_reference_filter = true, _filter_disabled = false, _have_command = false;
     // 参考缓存与实测临时缓存分开，避免记录时混用。
     Eigen::VectorXd _q_ref, _active;

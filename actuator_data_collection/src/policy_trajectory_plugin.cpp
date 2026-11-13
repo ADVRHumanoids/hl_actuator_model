@@ -27,6 +27,7 @@ bool PolicyTrajectoryPlugin::on_initialize()
     getParam("~max_velocity", _max_velocity);
     getParam("~max_link_torque", _max_link_torque);
     getParam("~max_tracking_error", _max_tracking_error);
+    getParam("~max_ref_rate", _max_ref_rate);
     getParam("~disable_reference_filter", _disable_reference_filter);
     getParam("~enable_log", _enable_log);
     getParam("~log_file", _log_file);
@@ -51,10 +52,13 @@ bool PolicyTrajectoryPlugin::on_initialize()
 void PolicyTrajectoryPlugin::on_start()
 {
     _param_upd_queue.run();
-    for(double limit : {_q_min, _q_max, _max_velocity, _max_link_torque, _max_tracking_error, _stop_time, _seed})
+    for(double limit : {_q_min, _q_max, _max_velocity, _max_link_torque, _max_tracking_error, _max_ref_rate,
+                        _stop_time, _seed})
         if(!std::isfinite(limit)) throw std::invalid_argument("nonfinite policy experiment parameter");
     if(_q_min >= _q_max || _max_velocity <= 0 || _max_link_torque <= 0 || _max_tracking_error <= 0)
         throw std::invalid_argument("configure output-side policy experiment limits first");
+    if(_max_ref_rate <= 0 || _max_ref_rate >= 20.0)
+        throw std::invalid_argument("max_ref_rate must be in (0, 20) rad/s, the XBot2 HAL d(pos_ref)/dt limit");
     _joint = _robot->getDeviceInstance<Hal::JointBase>(_joint_name);
     if(!_joint || _joint->readonly()) throw std::invalid_argument("joint must name a writable joint");
     _idx = _model->getDofIndex(_joint_name);
@@ -73,11 +77,16 @@ void PolicyTrajectoryPlugin::on_start()
         throw std::invalid_argument("q0 +- amplitude exceeds position limits");
     if(_gen.max_step*_gen.policy_rate_hz > _max_velocity)
         throw std::invalid_argument("max_step * policy_rate_hz exceeds max_velocity");
+    // 每次目标变化都要在下一次策略更新前走完，否则就不是零阶保持了。
+    if(_gen.max_step > _max_ref_rate/_gen.policy_rate_hz)
+        throw std::invalid_argument("max_step exceeds max_ref_rate / policy_rate_hz");
     jinfo("policy targets for joint {}: q0 {}, amplitude {}, {} updates at {} Hz, seed {}",
           _joint_name, _gen.initial_value, _gen.amplitude, _targets.size(), _gen.policy_rate_hz, _gen.seed);
 
     _q_ref = _q;
     _q_ref(_idx) = _gen.initial_value;
+    _q_target = _gen.initial_value;
+    _k_cmd = 0;
     _active.setZero();
     _active(_idx) = 1;
     // 先建日志：MakeLogger 会因文件名不合法抛出（例如名字里带点 "A0.1"，MatLogger2 只接受 .mat 或无扩展名）。
@@ -93,7 +102,7 @@ void PolicyTrajectoryPlugin::on_start()
         for(const auto& name : {"q_ref", "q_link", "q_mot", "v_link", "v_mot", "tau_link", "tau_mot",
                                 "tau_ref", "temp_mot", "temp_dri", "active"})
             _logger->create(name, _q.size());
-        for(const auto& name : {"time", "trajectory_time", "valid", "segment", "policy_index"})
+        for(const auto& name : {"time", "trajectory_time", "valid", "segment", "policy_index", "q_target"})
             _logger->create(name, 1);
         // 本次实验的生成参数各记一次，便于离线用同一种子复现目标序列。
         for(const auto& [name, value] : std::initializer_list<std::pair<const char*, double>>{
@@ -133,15 +142,15 @@ void PolicyTrajectoryPlugin::run()
        _q(_idx) < _q_min || _q(_idx) > _q_max || std::abs(_v(_idx)) > _max_velocity ||
        std::abs(_tau(_idx)) > _max_link_torque || std::abs(_q(_idx) - _q_ref(_idx)) > _max_tracking_error)
         throw std::runtime_error("policy experiment telemetry exceeded configured limits");
-    const int k = _gen.index(_elapsed);
-    // 先记录当前反馈和上一周期已下发的目标；第一行 valid=0（尚无本插件指令）。
+    // 先记录当前反馈和上一周期已下发的指令（q_ref 限速后、q_target 限速前）；第一行 valid=0。
     if(_logger) {
         const double wall = std::chrono::duration<double>(std::chrono::steady_clock::now() - _clock_start).count();
         _logger->add("time", wall);
         _logger->add("trajectory_time", _elapsed);
         _logger->add("valid", _have_command ? 1.0 : 0.0);
-        _logger->add("segment", double(_segments[k]));
-        _logger->add("policy_index", double(k));
+        _logger->add("segment", double(_segments[_k_cmd]));
+        _logger->add("policy_index", double(_k_cmd));
+        _logger->add("q_target", _q_target);
         _logger->add("active", _active);
         _logger->add("q_ref", _q_ref);
         _logger->add("q_link", _q);
@@ -163,8 +172,13 @@ void PolicyTrajectoryPlugin::run()
     }
     // 发出终点目标（= q0）后再多记录一个周期。
     if(_elapsed > _stop_time + getPeriodSec()/2) { stop(); return; }
-    _q_ref(_idx) = _targets[k];
-    _joint->set_pos_ref(_targets[k]);
+    // 策略目标按零阶保持查表；实际下发的参考向它移动，每周期最多 max_ref_rate*dt，
+    // 满足 HAL 的 d(pos_ref)/dt 限制。preflight 已保证每次目标变化在下一次策略更新前走完。
+    _k_cmd = _gen.index(_elapsed);
+    _q_target = _targets[_k_cmd];
+    const double dmax = _max_ref_rate*getPeriodSec();
+    _q_ref(_idx) += std::clamp(_q_target - _q_ref(_idx), -dmax, dmax);
+    _joint->set_pos_ref(_q_ref(_idx));
     _joint->set_vel_ref(0.0);  // 策略只给目标位置，不给速度前馈
     _joint->move();
     _have_command = true;
