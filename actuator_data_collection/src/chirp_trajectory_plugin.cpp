@@ -30,6 +30,11 @@ bool ChirpTrajectoryPlugin::on_initialize()
     getParam("~freq_max", freq_max);
     getParam("~period", period);
     getParam("~phase_offset", phase);
+    getParam("~position_min", _q_min);
+    getParam("~position_max", _q_max);
+    getParam("~max_velocity", _max_velocity);
+    getParam("~max_link_torque", _max_link_torque);
+    getParam("~max_tracking_error", _max_tracking_error);
 
     for(auto [jname, a] : amplitude)
     {
@@ -169,6 +174,10 @@ bool ChirpTrajectoryPlugin::on_initialize()
     _model->getJointVelocity(_v);
     _model->getJointVelocity(_v_sent);
     _v_sent.setZero();
+    _model->getJointPositionMinimal(_q_cmd);
+    _model->getJointPositionMinimal(_q_meas);
+    _model->getJointVelocity(_v_meas);
+    _model->getJointVelocity(_tau_meas);
     _model->getJointAcceleration(_a);
     _model->computeInverseDynamics(_tauid);
 
@@ -232,6 +241,7 @@ void ChirpTrajectoryPlugin::on_start()
         t.initial_value = j->get_pos_ref();
 
         jinfo("initial value for joint {} set to {}", j->get_name(), t.initial_value);
+        _q_cmd(_model->getDofIndex(j->get_name())) = t.initial_value;
 
         auto it = std::find(_enabled_joints.begin(), _enabled_joints.end(), j->get_name());
 
@@ -265,6 +275,37 @@ void ChirpTrajectoryPlugin::run()
     // update telemetry
     _robot->sense(false);
 
+    // 安全检查：只检查有幅值的关节；跟踪误差只在位置模式下检查（和上一周期下发的参考比）。
+    _robot->getJointPositionMinimal(_q_meas);
+    _robot->getJointVelocity(_v_meas);
+    _robot->getJointEffort(_tau_meas);
+    std::string violation;
+    for(auto& [j, t] : _trj_map)
+    {
+        if(t.amplitude == 0.0 || !violation.empty())
+        {
+            continue;
+        }
+        const int i = _model->getDofIndex(j->get_name());
+        const double q = _q_meas(i), v = _v_meas(i), tau = _tau_meas(i), e = q - _q_cmd(i);
+        if(!std::isfinite(q) || !std::isfinite(v) || !std::isfinite(tau))
+            violation = fmt::format("{}: nonfinite telemetry q {} v {} tau_link {}", j->get_name(), q, v, tau);
+        else if(_q_min < _q_max && (q < _q_min || q > _q_max))
+            violation = fmt::format("{}: position {} outside [{}, {}] rad", j->get_name(), q, _q_min, _q_max);
+        else if(_max_velocity > 0 && std::abs(v) > _max_velocity)
+            violation = fmt::format("{}: |velocity| {} > max_velocity {} rad/s", j->get_name(), std::abs(v), _max_velocity);
+        else if(_max_link_torque > 0 && std::abs(tau) > _max_link_torque)
+            violation = fmt::format("{}: |tau_link| {} > max_link_torque {} Nm", j->get_name(), std::abs(tau), _max_link_torque);
+        else if(_trj_out == Position && _max_tracking_error > 0 && std::abs(e) > _max_tracking_error)
+            violation = fmt::format("{}: |q - q_ref| {} > max_tracking_error {} rad", j->get_name(), std::abs(e), _max_tracking_error);
+    }
+    if(!violation.empty())
+    {
+        jinfo("SAFETY STOP trj_chirp: {}", violation);
+        stop();
+        return;
+    }
+
     // execute trajectories
     bool trj_ended = false;
     double trj_time = 0;
@@ -282,6 +323,7 @@ void ChirpTrajectoryPlugin::run()
             _a(jidx) = a;
 
             j->set_pos_ref(q);
+            _q_cmd(jidx) = q;
             // 与 trj 唯一的不同：不给速度前馈，速度参考置 0。
             j->set_vel_ref(0.0);
         }

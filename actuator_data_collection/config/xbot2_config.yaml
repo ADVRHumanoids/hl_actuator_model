@@ -89,6 +89,13 @@ xbotcore_plugins:
       enable_log: true
       log_file: /tmp/trajectory_log_chirp_zero_vel
       trj_out: Position  # Torque
+      # 安全检查（每项 > 0 时生效；越限时打印 SAFETY STOP trj_chirp 并停止插件）。
+      # 按幅值 1 rad、1 Hz 估计：峰值速度约 6.3 rad/s；无速度前馈时跟踪滞后约 0.65 rad。
+      position_min: -1.5707963267948966
+      position_max: 1.5707963267948966
+      max_velocity: 8.0
+      max_link_torque: 30.0
+      max_tracking_error: 1.0
 
 
 # global parameters
