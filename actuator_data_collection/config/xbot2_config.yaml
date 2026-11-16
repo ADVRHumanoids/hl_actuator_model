@@ -75,8 +75,7 @@ xbotcore_plugins:
       # 电机手册：额定 1.76 Nm / 13.6 A，峰值 4.95 Nm / 38.6 A，Kt 0.129 Nm/A；减速比 50，未计效率（与 tau_mot 的算法一致）。
       # 之后测 20:1 的那台时改成 rated_torque 35.2、peak_torque 99。
       rated_torque: 88.0          # 额定（连续）力矩 = 1.76 × 50；状态行统计 |tau_mot| 超过它的时间比例。
-      peak_torque: 247.5          # 峰值力矩 = 4.95 × 50；max_link_torque 不能超过它。减速器、力矩传感器的额定/量程若更小，以较小者为准
-                                  # （标定台数据里 tau_link 在约 100–115 N·m 处饱和）。
+      peak_torque: 247.5          # 峰值力矩 = 4.95 × 50；max_link_torque 不能超过它。减速器、力矩传感器的额定/量程若更小，以较小者为准。
       stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定，用户 2026-11-16 给定；绕组上限查到后再调）；连续 0.5 s 达到就停（THERMAL STOP）。
       stop_driver_temperature: 0.0      # 驱动器温度停机线 °C，0 表示不检查。
       max_start_motor_temperature: 0.0  # 启动时电机温度上限 °C（如环境温度 + 3），保证每档从冷态开始；0 表示不检查。

@@ -30,9 +30,8 @@ rated / no-load speed 14.8 / 22.9 rad/s, reflected rotor inertia 0.0086 kg m^2; 
 | Ambient operating range | -20 to 50 C | |
 
 Not in the datasheet: maximum winding temperature (insulation class; 70 C is used as a provisional stop line),
-location of the `temp_mot` sensor, gearbox and torque-sensor ratings. The calibration data (same 50:1 type)
-show `tau_link` saturating at about 100 to 115 Nm, far below the 247.5 Nm motor peak, so the usable overload
-range at the output is probably set by the gearbox / sensor, not the motor. Hot motor: copper resistance about +0.39 %/C (more loss at the same current),
+location of the `temp_mot` sensor, gearbox and torque-sensor ratings (they may limit the output below
+motor x ratio). Hot motor: copper resistance about +0.39 %/C (more loss at the same current),
 magnet flux and Kt down roughly 0.1 %/C, so the current-based `tau_mot` overestimates the real torque.
 
 ## 0. Open questions (need answers before Phase 1)
@@ -81,8 +80,8 @@ What each trajectory contributes:
   (stiffness, stiction), step transients of the drive, the zero-order-hold rhythm the network sees in
   simulation.
 
-Locked-output torque-mode runs (as in the existing calibration data) cover the high-torque saturation
-region; reuse those or repeat them once per actuator.
+Locked-output torque-mode runs cover the high-torque region (static `tau_link` vs `tau_mot` curve, maximum
+transmissible torque); they need a mechanical lock of the output and a torque-step plugin.
 
 ## 3. Phase 2: temperature and overload
 
