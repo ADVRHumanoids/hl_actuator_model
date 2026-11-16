@@ -63,7 +63,7 @@ g++ -std=c++17 -O2 -Wall -Wextra -pedantic actuator_data_collection/src/preview_
   - 日志由后台线程持续写盘，几小时也不会占满内存或被覆盖（原来 `stop_time` 为 0 时只保留最后 1000 s）。
   - 新增日志变量：`cycle`（第几个扫频周期）、`freq`（当前频率 Hz）、`trajectory_time`，结束时写 `stop_code`（0 跑完、1 电机温度、3 安全检查、4 外部停止）、`stop_elapsed`、`dropped_samples`。
   - 每 10 s 打印一行：周期、频率、电机 / 驱动器温度、`tau_mot` RMS，换配重时用它判断力矩档位。
-  - 温度停机线 `stop_motor_temperature` 是可选项，yaml 里没写就不检查（启动时会提示），要靠人看状态行；驱动器自身的过温 / I²t 保护仍然有效。
+  - 温度停机线 `stop_motor_temperature` 是可选项，yaml 里现为 70 °C（暂定，与 `trj_policy` 相同）；删掉这一行就不检查（启动时会提示）。驱动器自身的过温 / I²t 保护仍然有效。
   - 配重加重后若 `|tau_link|` 超过 `max_link_torque`（现为 30 N·m）会 `SAFETY STOP`；这一项要在 yaml 里调（不超过峰值力矩），不能在线改。
 
 `trj` 的文件没有改动。

@@ -75,7 +75,7 @@ xbotcore_plugins:
       # 电机手册：额定 1.76 Nm / 13.6 A，峰值 4.95 Nm / 38.6 A，Kt 0.129 Nm/A；减速比 20，未计效率（与 tau_mot 的算法一致）。
       rated_torque: 35.2          # 额定（连续）力矩 = 1.76 × 20；状态行统计 |tau_mot| 超过它的时间比例。
       peak_torque: 99.0           # 峰值力矩 = 4.95 × 20；max_link_torque 不能超过它。减速器自身的额定/峰值若更小，以较小者为准。
-      stop_motor_temperature: 0.0 # 电机温度停机线 °C = 绕组上限减余量；连续 0.5 s 超过就停（THERMAL STOP）。手册只给了环境温度 -20~50 °C，绕组上限待查，未填时插件拒绝启动。
+      stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定，用户 2026-11-16 给定；绕组上限查到后再调）；连续 0.5 s 达到就停（THERMAL STOP）。
       stop_driver_temperature: 0.0      # 驱动器温度停机线 °C，0 表示不检查。
       max_start_motor_temperature: 0.0  # 启动时电机温度上限 °C（如环境温度 + 3），保证每档从冷态开始；0 表示不检查。
       probe_duration: 0.0         # 探测段时长 s，0 = 不插（与原来的单段序列相同）。温升实验建议 30。可在线调。
@@ -109,6 +109,7 @@ xbotcore_plugins:
       max_velocity: 8.0
       max_link_torque: 30.0
       max_tracking_error: 1.0
+      stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定，同 trj_policy）；连续 0.5 s 达到就停（THERMAL STOP）。删掉这一行则不检查。
 
 
 # global parameters
