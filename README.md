@@ -12,12 +12,14 @@
 export ACTUATOR_ID=A0368 LOAD_MASS=2.0 LOAD_RADIUS=0.30 KP=80 KD=8.5   # 空载时 LOAD_MASS=0 LOAD_RADIUS=0
 ./run_trj.sh trj_chirp  j_motor/amplitude=0.3 log_file=/tmp/chirp_A030
 ./run_trj.sh trj_policy amplitude=0.1 seed=1.0 log_file=/tmp/policy_A010_seed1
+AMBIENT_TEMP=22 ./run_trj.sh trj_policy amplitude=0.4 stop_time=7200 probe_duration=30 log_file=/tmp/thermal_L150   # 温升实验
 DRY_RUN=1 ./run_trj.sh trj_chirp j_motor/amplitude=0.3 log_file=/tmp/x     # 只打印，不执行
 ```
 
 - 每次实验用新的 `log_file`；名字不要带点（`A0.1` 写成 `A010`），MatLogger2 只接受 `.mat` 或无扩展名。
 - `ACTUATOR_ID`、`LOAD_MASS`、`LOAD_RADIUS` 必填（不想写条件文件时设 `META=0`）。
 - 拷数据时把 `.mat` 和 `_meta.yaml` 一起拷走。
+- 温升实验加 `AMBIENT_TEMP`（环境温度 °C），写进条件文件。
 
 ## 策略式目标插件 `trj_policy`（试验中）
 
@@ -28,14 +30,20 @@ DRY_RUN=1 ./run_trj.sh trj_chirp j_motor/amplitude=0.3 log_file=/tmp/x     # 只
 - 只下发目标位置，速度参考恒为 0。默认在实验期间关闭 joint_safety 参考滤波，结束后恢复（`disable_reference_filter`，与 `trj` 相同）。
 - 同一 `seed` 在 Windows 预览和台架上生成完全相同的目标序列；每次实验换一个 seed。
 - 运行中越限时插件打印 `SAFETY STOP trj_policy ...`（哪一项、实际值、阈值），写出已采数据后停止；参考保持上一周期的值，xbot2-core 不受影响。
-- 启动前必须在 `config/xbot2_config.yaml` 填 `max_velocity`、`max_link_torque`、`max_tracking_error`（为 0 时拒绝启动，但不影响 xbot2-core 和 `trj`）；还要求 q0 ± A 在位置限内，`max_step × policy_rate_hz ≤ max_velocity`，`max_step ≤ max_ref_rate / policy_rate_hz`。
-- 日志（默认 `/tmp/policy_targets`）的变量与 `trj` 相同，另有：`time`、`valid`、`q_target`、`segment`（0 停留、1 斜坡、2 阶跃）、`policy_index`，以及只记一次的 `cfg_*`（种子、幅值、频率、`max_step`、q0、是否关滤波）。
+- 启动前必须在 `config/xbot2_config.yaml` 填 `max_velocity`、`max_link_torque`、`max_tracking_error`，以及数据手册上的 `rated_torque`、`peak_torque`（输出端 N·m）和 `stop_motor_temperature`（°C）（为 0 时拒绝启动，但不影响 xbot2-core 和 `trj`）；`max_link_torque` 不能超过 `peak_torque`；还要求 q0 ± A 在位置限内，`max_step × policy_rate_hz ≤ max_velocity`，`max_step ≤ max_ref_rate / policy_rate_hz`。
+- 日志（默认 `/tmp/policy_targets`）的变量与 `trj` 相同，另有：`time`、`valid`、`q_target`、`segment`（0 停留、1 斜坡、2 阶跃）、`policy_index`、`probe`、`chunk`，只记一次的 `cfg_*`（种子、幅值、频率、`max_step`、q0、是否关滤波、温升参数、启动时电机温度），以及结束时写的 `stop_code`（0 跑完、1 电机温度、2 驱动器温度、3 安全检查、4 外部停止）、`stop_elapsed`、`dropped_samples`。日志在运行中由后台线程持续写盘（MatAppender），长时间实验不占满内存。
+- 温升 / 过载实验（见实验计划第 3 节）：
+  - 电机温度连续 0.5 s 达到 `stop_motor_temperature` 时打印 `THERMAL STOP trj_policy ...` 并停止；可选 `stop_driver_temperature`。
+  - `max_start_motor_temperature` > 0 时，电机温度高于它就拒绝启动，保证每档从冷态开始。
+  - `probe_duration` > 0 时目标序列为 探测段、加热段 交替（P H P H ...），每个探测段完全相同（`probe_seed`），第一个是冷态基准；加热段长 `heat_duration`，种子依次为 seed、seed+1……；总时长按整段向上取整。
+  - 每 `status_period` 秒打印一行：电机 / 驱动器温度、`tau_mot` RMS（最近一段和从开始）、超过额定力矩的时间比例。用它在试跑时调整幅值和 q0，让 RMS 落在目标档位。
 
-离线预览（不连硬件；参数依次为 幅值A、seed、max_step、策略频率，其余用默认值 T=60 s、R=5 s、q0=0）：
+离线预览（不连硬件；参数依次为 幅值A、seed、max_step、策略频率、总时长、探测段时长、加热段时长、探测段种子，其余用默认值 R=5 s、q0=0）：
 
 ```bash
 g++ -std=c++17 -O2 -Wall -Wextra -pedantic actuator_data_collection/src/preview_policy.cpp -o preview_policy
-./preview_policy 0.3 0 0.05 50 > policy.csv   # 列：time,q_ref,segment，1 ms 间隔
+./preview_policy 0.3 0 0.05 50 > policy.csv   # 列：time,q_ref,segment,probe，1 ms 间隔
+./preview_policy 0.3 0 0.05 50 1200 30 300 1000 > thermal.csv   # 插探测段
 ```
 
 ## `trj_chirp`：不带速度参考的扫频正弦（试验中）

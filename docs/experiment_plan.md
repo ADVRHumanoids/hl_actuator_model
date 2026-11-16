@@ -17,6 +17,8 @@ All numbers below are proposals to discuss; thresholds must be confirmed against
 | Drive position-loop gains (kp, kd) used on the robot? Can they be read through XBot2? | The network is valid only for these gains; they go into every run's metadata. |
 | Available loads (mass, radius) and the actuator's rated / peak torque and speed. | Defines the load levels and the safety thresholds. |
 | Gearbox type of the bench actuator (harmonic drive? planetary?). | Determines realistic fault modes (Phase 4). |
+| Rated (continuous) and peak torque at the output, maximum motor temperature, and where `temp_mot` is measured (winding or housing). | `trj_policy` refuses to start without `rated_torque`, `peak_torque`, `stop_motor_temperature`; the sensor location sets the safety margin. |
+| Drive current / I²t limits and their derating with temperature. | In the overload phase the drive may limit current before the temperature stop. |
 
 ## 1. Phase 0: verification after the encoder repair (~30 min)
 
@@ -54,19 +56,58 @@ What each trajectory contributes:
 Locked-output torque-mode runs (as in the existing calibration data) cover the high-torque saturation
 region; reuse those or repeat them once per actuator.
 
-## 3. Phase 2: temperature (~1.5 h)
+## 3. Phase 2: temperature and overload
 
-Temperature changes the torque constant (magnet), winding resistance (voltage headroom), gearbox
-friction (lubricant viscosity) and the torque-sensor offset. `temp_mot` and `temp_dri` are already logged.
+Goals: (a) how long the actuator can run between rated and peak torque before reaching its temperature
+limit; (b) how the actuator behaves as it heats up (torque constant, friction, tracking, current limits);
+(c) temperature-labelled identification data. Temperature changes the torque constant (magnet), winding
+resistance (voltage headroom), gearbox friction (lubricant viscosity) and the torque-sensor offset.
 
-1. Cold start: first runs of the day, before anything else (one chirp + one policy run, heavy load).
-2. Heating: repeated policy runs at the heavy load until the motor temperature stops rising.
-3. Hot: repeat the cold-start runs.
-4. Record the ambient temperature in `NOTE`.
+Heating comes from the heavy load running dynamic `trj_policy` targets (no locked output, no torque mode).
 
-Analysis: train on normal-temperature data, then check whether the prediction error correlates with
-temperature. Only if it does, add temperature as a network input (with a first-order thermal model in
-simulation) or randomize the affected parameters.
+Plugin support (`trj_policy`):
+
+- Required: `rated_torque`, `peak_torque` (output N·m) and `stop_motor_temperature` (datasheet limit minus a
+  margin; larger margin if `temp_mot` is a housing sensor). `max_link_torque` must not exceed `peak_torque`.
+- Temperature stop: `THERMAL STOP` after `temp_mot` stays at or above the stop line for 0.5 s (optional
+  `stop_driver_temperature`). Logged `stop_code`: 0 completed, 1 motor temperature, 2 driver temperature,
+  3 safety limit, 4 stopped externally; `stop_elapsed` is the run time at the stop.
+- `max_start_motor_temperature` (e.g. ambient + 3 °C) refuses to start a warm motor, so every level starts cold.
+- Probes: with `probe_duration > 0` the targets alternate probe and heating segments, P H P H ...; every probe
+  is the same sequence (`probe_seed`), the first one is the cold baseline. Logged as `probe` / `chunk`.
+- Every `status_period` s the plugin prints motor / driver temperature, RMS `tau_mot` (current-based, the
+  heat source) over the last period and since start, and the share of time above `rated_torque`.
+- The log is streamed to disk during the run, so hour-long runs do not accumulate in memory.
+
+Procedure, per overload level:
+
+1. Choose the level: target RMS `tau_mot` of about 1.0, 1.25, 1.5 and 1.75 x rated (not above peak). With a
+   dynamic trajectory the level is set by the load (m, r), the centre angle `q0` (near horizontal for more
+   gravity torque) and `amplitude` / `max_step`. Tune in a short trial run by watching the status line, then
+   keep the settings fixed.
+2. Start cold (`max_start_motor_temperature`), record the ambient temperature (`AMBIENT_TEMP` in `run_trj.sh`).
+3. Run with `stop_time: 7200`, `probe_duration: 30`, `heat_duration: 300` until `THERMAL STOP`.
+4. Cooling curve: move the load to the hanging position (gravity torque about 0) and run `trj_policy` with
+   `amplitude: 0` (and `max_start_motor_temperature: 0`) for 30 to 60 min; it starts once the motor is below
+   the stop line. Then let the motor reach ambient before the next level.
+
+Expect one or two levels per session because of the cool-down.
+
+Safety: mechanical end stops on the load, nobody in its swing range, an operator watching the status line.
+If the drive limits current (I²t) first, the tracking error grows and the plugin stops with `SAFETY STOP`, or
+XBot2 fires `on_safety_triggered()`; note which one happened.
+
+Analysis:
+
+- Time to the stop line versus RMS `tau_mot`: the overload capability curve between rated and peak.
+- Thermal model from heating and cooling curves: `C dT/dt = k tau_mot^2 (1 + alpha (T - T_ref)) - (T - T_amb) / R`
+  (two nodes, winding and housing, if one time constant does not fit). It predicts the allowed time for
+  other duty cycles and gives a temperature state for simulation.
+- Behaviour versus temperature from the identical probes: tracking error, `tau_link / tau_mot` (torque
+  constant and efficiency), friction at speed, current saturation.
+- Network: train on the cold part, check whether the prediction error correlates with temperature; only if
+  it does, add temperature (from the thermal model in simulation) as an input or randomize the affected
+  parameters.
 
 ## 4. Phase 3: faults (only reversible emulation, after lab approval)
 

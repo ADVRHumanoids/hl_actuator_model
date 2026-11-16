@@ -123,4 +123,43 @@ struct PolicyTargets
     }
 };
 
+// 长时间（温升）实验的目标序列：探测段 P 和加热段 H 交替，P H0 P H1 P H2 ...，直到总时长不少于 total。
+// 探测段每次都用 probe_seed，目标序列完全相同，用来比较同一输入在不同温度下的响应；
+// 第一段就是探测段，作为冷态基准。加热段 k 用种子 base.seed + k。
+// 每段都从 q0 出发、回到 q0，所以首尾相接是连续的；段间的过渡由各段自己的包络完成。
+// probe_duration <= 0 时只有一段 duration = total、种子 base.seed，与 base.generate() 完全相同。
+// 输出：q、segment 同 generate()；probe 为 1 表示探测段；chunk 为段号 0, 1, 2, ...
+// 返回实际总时长 s（按整段向上取整，可能略大于 total）。
+inline double generate_schedule(const PolicyTargets& base, double total, double heat_duration,
+                                double probe_duration, std::uint64_t probe_seed,
+                                std::vector<double>& q, std::vector<int>& segment,
+                                std::vector<int>& probe, std::vector<int>& chunk)
+{
+    if(!std::isfinite(total) || total <= 0 || !std::isfinite(heat_duration) || !std::isfinite(probe_duration))
+        throw std::invalid_argument("policy schedule: invalid durations");
+    const bool probes = probe_duration > 0;
+    if(probes && heat_duration <= 0)
+        throw std::invalid_argument("policy schedule: heat_duration must be > 0 when probes are enabled");
+    q.clear(); segment.clear(); probe.clear(); chunk.clear();
+    std::vector<double> qc;
+    std::vector<int> sc;
+    double covered = 0;
+    for(int c = 0, heat = 0; covered < total - 1e-9; ++c)
+    {
+        PolicyTargets g = base;
+        const bool is_probe = probes && c % 2 == 0;
+        g.duration = !probes ? total : is_probe ? probe_duration : heat_duration;
+        g.seed = is_probe ? probe_seed : base.seed + std::uint64_t(heat++);
+        g.generate(qc, sc);  // 每段各自检查 duration >= 2*warmup_time
+        if(qc.size() < 2) throw std::invalid_argument("policy schedule: segment shorter than one policy period");
+        const std::size_t first = q.empty() ? 0 : 1;  // 段首 = 上一段段尾 = q0，不重复
+        q.insert(q.end(), qc.begin() + first, qc.end());
+        segment.insert(segment.end(), sc.begin() + first, sc.end());
+        probe.insert(probe.end(), qc.size() - first, is_probe ? 1 : 0);
+        chunk.insert(chunk.end(), qc.size() - first, c);
+        covered += double(qc.size() - 1)/base.policy_rate_hz;
+    }
+    return covered;
+}
+
 } // namespace actuator_collection

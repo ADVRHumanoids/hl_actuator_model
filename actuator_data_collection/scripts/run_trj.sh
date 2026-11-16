@@ -14,7 +14,7 @@
 # 参数名不带插件前缀，脚本会自动加上 /<插件名>/。
 # 实验条件（写进 <log_file>_meta.yaml，转换数据时自动读取）：
 #   必填 ACTUATOR_ID、LOAD_MASS（空载填 0）、LOAD_RADIUS（空载填 0）；
-#   选填 KP、KD（驱动器位置环增益）、NOTE（备注，如 "cold start"）。
+#   选填 KP、KD（驱动器位置环增益）、AMBIENT_TEMP（环境温度 °C，温升实验要填）、NOTE（备注，如 "cold start"）。
 #   不想写条件文件时设 META=0。
 # 服务名和类型可用环境变量覆盖：XBOT_PARAM_SERVICE、XBOT_PARAM_SRV_TYPE。
 set -euo pipefail
@@ -60,7 +60,7 @@ if [[ $META != 0 ]]; then
         echo "请设置 ACTUATOR_ID、LOAD_MASS（kg，空载填 0）、LOAD_RADIUS（m，空载填 0），或者 META=0 跳过。" >&2
         exit 1
     fi
-    for gain in KP KD; do
+    for gain in KP KD AMBIENT_TEMP; do
         if [[ -n ${!gain:-} ]] && ! [[ ${!gain} =~ $number ]]; then
             echo "$gain 应为非负数：${!gain}" >&2
             exit 1
@@ -120,6 +120,7 @@ write_meta() {
         echo "load_radius_m: $LOAD_RADIUS"
         echo "drive_kp: ${KP:-null}"
         echo "drive_kd: ${KD:-null}"
+        echo "ambient_temp_c: ${AMBIENT_TEMP:-null}"
         echo "note: $(quote "${NOTE:-}")"
         echo "config_file: $(quote "$repo/actuator_data_collection/config/xbot2_config.yaml")"
         echo "git_branch: $(quote "$branch")"
