@@ -9,23 +9,25 @@ All numbers below are proposals to discuss; thresholds must be confirmed against
 
 ## Actuator data
 
-Motor datasheet (motor side), bus voltage 48 V, gear ratio 20 (output values below ignore gearbox efficiency,
+Motor datasheet (motor side), bus voltage 48 V, gear ratio 50 (output values below ignore gearbox efficiency,
 like the drive's current-based `tau_mot`):
 
-| | Motor | Output (x20) |
+| | Motor | Output (x50) |
 |---|---|---|
-| Rated torque / current | 1.76 Nm / 13.6 A | 35.2 Nm |
-| Peak torque / current | 4.95 Nm / 38.6 A | 99 Nm |
-| Rated / no-load speed at 48 V | 2825 / 4368 rpm | 14.8 / 22.9 rad/s |
+| Rated torque / current | 1.76 Nm / 13.6 A | 88 Nm |
+| Peak torque / current | 4.95 Nm / 38.6 A | 247.5 Nm |
+| Rated / no-load speed at 48 V | 2825 / 4368 rpm | 5.9 / 9.1 rad/s |
 | Kt, Ke, Kv | 0.129 Nm/A, 10.47 V/krpm, 105 rpm/V | |
 | Km | 0.3634 Nm/sqrt(W): copper loss (tau/Km)^2 = 23 W rated, 186 W peak (cold) | |
 | Line resistance / inductance | 126 mOhm / 366.7 uH | |
-| Rotor inertia | 215.5 g cm^2 | 0.0086 kg m^2 at the output (x400) |
+| Rotor inertia | 215.5 g cm^2 | 0.054 kg m^2 at the output (x2500) |
 | Electrical / mechanical time constant | 2.91 ms / 0.16 ms | |
 | Ambient operating range | -20 to 50 C | |
 
-Not in the datasheet: maximum winding temperature (insulation class), location of the `temp_mot` sensor,
-gearbox rated / peak torque. Hot motor: copper resistance about +0.39 %/C (more loss at the same current),
+Not in the datasheet: maximum winding temperature (insulation class; 70 C is used as a provisional stop line),
+location of the `temp_mot` sensor, gearbox and torque-sensor ratings. The calibration data (same 50:1 type)
+show `tau_link` saturating at about 100 to 115 Nm, far below the 247.5 Nm motor peak, so the usable overload
+range at the output is probably set by the gearbox / sensor, not the motor. Hot motor: copper resistance about +0.39 %/C (more loss at the same current),
 magnet flux and Kt down roughly 0.1 %/C, so the current-based `tau_mot` overestimates the real torque.
 
 ## 0. Open questions (need answers before Phase 1)
@@ -38,7 +40,7 @@ magnet flux and Kt down roughly 0.1 %/C, so the current-based `tau_mot` overesti
 | Drive position-loop gains (kp, kd) used on the robot? Can they be read through XBot2? | The network is valid only for these gains; they go into every run's metadata. |
 | Available loads (mass, radius) and the actuator's rated / peak torque and speed. | Defines the load levels and the safety thresholds. |
 | Gearbox type of the bench actuator (harmonic drive? planetary?). | Determines realistic fault modes (Phase 4). |
-| Maximum winding temperature (insulation class) and where `temp_mot` is measured (winding or housing); gearbox rated / peak torque. Rated / peak motor torque are known (see Actuator data). | `trj_policy` refuses to start without `stop_motor_temperature`; the sensor location sets the safety margin; the gearbox may limit below 35 / 99 Nm. |
+| Maximum winding temperature (insulation class) and where `temp_mot` is measured (winding or housing); gearbox rated / peak torque. Rated / peak motor torque are known (see Actuator data). | `trj_policy` refuses to start without `stop_motor_temperature`; the sensor location sets the safety margin; the gearbox / torque sensor may limit below 88 / 247.5 Nm. |
 | Drive current / I²t limits and their derating with temperature. | In the overload phase the drive may limit current before the temperature stop. |
 
 ## 1. Phase 0: verification after the encoder repair (~30 min)
