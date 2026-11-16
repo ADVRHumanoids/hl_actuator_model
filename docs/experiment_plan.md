@@ -93,6 +93,12 @@ Procedure, per overload level:
 
 Expect one or two levels per session because of the cool-down.
 
+Alternative heating run, speed coverage per temperature: `trj_chirp` with a large `stop_time` (or 0, stopped by
+hand) repeats the frequency sweep `freq_min -> freq_max -> freq_min` every `period`, so every cycle covers the
+whole speed range and the cycles are directly comparable across temperatures (`cycle`, `freq` are logged). The
+torque level is set by changing the load by hand, one log file per load. The temperature stop is optional
+(`stop_motor_temperature` in the yaml); without it the operator watches the status line.
+
 Safety: mechanical end stops on the load, nobody in its swing range, an operator watching the status line.
 If the drive limits current (I²t) first, the tracking error grows and the plugin stops with `SAFETY STOP`, or
 XBot2 fires `on_safety_triggered()`; note which one happened.

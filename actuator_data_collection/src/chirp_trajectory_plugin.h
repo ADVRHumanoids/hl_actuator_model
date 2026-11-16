@@ -4,8 +4,10 @@
 #include <xbot2/rt_plugin/control_plugin.h>
 #include <xbot2/hal/dev_joint.h>
 #include <matlogger2/matlogger2.h>
+#include <matlogger2/utils/mat_appender.h>
 #include <xbot2/ros/ros2_support.h>
 #include <std_msgs/msg/float32.hpp>
+#include <cmath>
 
 namespace XBot {
 
@@ -47,6 +49,9 @@ private:
     std::string _trj_out_str = "Position";
 
     MatLogger2::Ptr _logger;
+    // 日志由后台线程持续写盘：长时间循环扫频（stop_time 很大或为 0）时不会攒在内存里，也不会被循环缓冲覆盖。
+    MatAppender::Ptr _appender;
+    long _dropped = 0;                      // 日志缓冲满而丢掉的周期数，应为 0。
 
     Eigen::VectorXd _tau_id;
 
@@ -63,6 +68,14 @@ private:
     Eigen::VectorXd _q_cmd;                 // 上一周期下发的位置参考，用于跟踪误差检查
     Eigen::VectorXd _q_meas, _v_meas, _tau_meas;
 
+    // 长时间运行：温度和力矩监测。stop_motor_temperature > 0 时电机温度连续 0.5 s 达到它就停（THERMAL STOP），
+    // 只在 yaml 里写了这一项时生效；status_period 秒打印一次状态行。
+    double _stop_motor_temperature = 0, _status_period = 10, _next_status = 0, _elapsed = 0;
+    Eigen::VectorXd _temp_mot, _temp_dri, _tau_mot, _cycle, _freq;
+    // 停止原因，写进日志 stop_code：0 跑完；1 电机温度；3 安全检查；4 外部停止或中止（与 trj_policy 相同）。
+    int _stop_code = 4;
+    void finish();
+
     struct Chirp
     {
         std::tuple<double, double, double> step(double dt);
@@ -70,6 +83,14 @@ private:
         void reset();
 
         double get_time() const { return _time; }
+
+        double get_freq() const { return _freq_hz; }
+
+        // 第几个扫频周期（频率 freq_min → freq_max → freq_min 为一个周期），从 0 开始。
+        double get_cycle() const { return std::floor(_time/period); }
+
+        // 每个关节自己的统计：tau_mot 平方和、样本数（最近一个状态周期），温度超线持续时间。
+        double win_sq = 0, win_n = 0, hot_time = 0;
 
         double warmup_time = 1.0;
         double freq_min_hz = 0.1;

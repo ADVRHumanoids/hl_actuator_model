@@ -35,6 +35,8 @@ bool ChirpTrajectoryPlugin::on_initialize()
     getParam("~max_velocity", _max_velocity);
     getParam("~max_link_torque", _max_link_torque);
     getParam("~max_tracking_error", _max_tracking_error);
+    getParam("~stop_motor_temperature", _stop_motor_temperature);  // 可选，yaml 里没有时为 0（不检查）
+    getParam("~status_period", _status_period);                    // 可选，默认 10 s
 
     for(auto [jname, a] : amplitude)
     {
@@ -180,6 +182,13 @@ bool ChirpTrajectoryPlugin::on_initialize()
     _model->getJointVelocity(_tau_meas);
     _model->getJointAcceleration(_a);
     _model->computeInverseDynamics(_tauid);
+    _model->getJointVelocity(_temp_mot);
+    _model->getJointVelocity(_temp_dri);
+    _model->getJointVelocity(_tau_mot);
+    _model->getJointVelocity(_cycle);
+    _model->getJointVelocity(_freq);
+    _cycle.setZero();
+    _freq.setZero();
 
     return true;
 
@@ -209,13 +218,14 @@ void ChirpTrajectoryPlugin::on_start()
 
         jinfo("logging enabled, log file: {}", _log_file);
 
+        // producer_consumer + MatAppender：rt 线程只往缓冲里放数据，后台线程持续写盘；缓冲按 60 s 设。
         MatLogger2::Options opt;
-        opt.default_buffer_size = _stop_time > 0 ? std::ceil(_stop_time / getPeriodSec()) : 1e6;
+        opt.default_buffer_size = std::ceil(60.0 / getPeriodSec());
 
         _logger = MatLogger2::MakeLogger(_log_file,
                                          opt);
 
-        _logger->set_buffer_mode(VariableBuffer::Mode::circular_buffer);
+        _logger->set_buffer_mode(VariableBuffer::Mode::producer_consumer);
 
         const int nv = _robot->getNv();
 
@@ -231,6 +241,17 @@ void ChirpTrajectoryPlugin::on_start()
         _logger->create("tau_id", nv);
         _logger->create("temp_mot", nv);
         _logger->create("temp_dri", nv);
+        _logger->create("cycle", nv);            // 第几个扫频周期
+        _logger->create("freq", nv);             // 当前频率 Hz
+        _logger->create("trajectory_time", 1);
+        for(const auto& name : {"stop_code", "stop_elapsed", "dropped_samples"})
+        {
+            _logger->create(name, 1);            // 结束时各写一次
+        }
+
+        _appender = MatAppender::MakeInstance();
+        _appender->add_logger(_logger);
+        _appender->start_flush_thread();
     }
 
 
@@ -263,6 +284,23 @@ void ChirpTrajectoryPlugin::on_start()
     }
 
     Hal::JointSafety::enable_filter(false, -1);
+
+    _elapsed = 0;
+    _next_status = _status_period;
+    _dropped = 0;
+    _stop_code = 4;
+    for(auto& [j, t] : _trj_map)
+    {
+        t.win_sq = t.win_n = t.hot_time = 0;
+    }
+    if(_stop_motor_temperature > 0)
+    {
+        jinfo("temperature stop at motor {} C", _stop_motor_temperature);
+    }
+    else
+    {
+        jinfo("no temperature stop configured (stop_motor_temperature); watch the status line");
+    }
 }
 
 void ChirpTrajectoryPlugin::starting()
@@ -279,7 +317,11 @@ void ChirpTrajectoryPlugin::run()
     _robot->getJointPositionMinimal(_q_meas);
     _robot->getJointVelocity(_v_meas);
     _robot->getJointEffort(_tau_meas);
-    std::string violation;
+    _robot->getMotorTorque(_tau_mot);
+    _robot->getTemperatureMotor(_temp_mot);
+    _robot->getTemperatureBoard(_temp_dri);
+    const double dt = getPeriodSec();
+    std::string violation, thermal;
     for(auto& [j, t] : _trj_map)
     {
         if(t.amplitude == 0.0 || !violation.empty())
@@ -298,10 +340,44 @@ void ChirpTrajectoryPlugin::run()
             violation = fmt::format("{}: |tau_link| {} > max_link_torque {} Nm", j->get_name(), std::abs(tau), _max_link_torque);
         else if(_trj_out == Position && _max_tracking_error > 0 && std::abs(e) > _max_tracking_error)
             violation = fmt::format("{}: |q - q_ref| {} > max_tracking_error {} rad", j->get_name(), std::abs(e), _max_tracking_error);
+        else if(_stop_motor_temperature > 0 && !std::isfinite(_temp_mot(i)))
+            violation = fmt::format("{}: nonfinite motor temperature", j->get_name());
+        // 温度停机线：连续 0.5 s 超过才停，避免单个读数跳变误停。
+        t.hot_time = _stop_motor_temperature > 0 && _temp_mot(i) >= _stop_motor_temperature ? t.hot_time + dt : 0.0;
+        if(t.hot_time >= 0.5 && thermal.empty())
+            thermal = fmt::format("{}: motor {} C >= {} C", j->get_name(), _temp_mot(i), _stop_motor_temperature);
+        if(std::isfinite(_tau_mot(i)))
+        {
+            t.win_sq += _tau_mot(i)*_tau_mot(i);
+            t.win_n += 1;
+        }
+    }
+    // 定期打印状态行：每个有幅值的关节的温度、tau_mot RMS、当前频率和扫频周期，便于手动换配重时判断力矩档位。
+    if(_elapsed >= _next_status)
+    {
+        for(auto& [j, t] : _trj_map)
+        {
+            if(t.amplitude == 0.0 || t.win_n == 0) continue;
+            const int i = _model->getDofIndex(j->get_name());
+            jinfo("t {:.0f} s | {} cycle {:.0f}, {:.2f} Hz | motor {:.1f} C, driver {:.1f} C | tau_mot rms {:.1f} Nm (last {:.0f} s){}",
+                  _elapsed, j->get_name(), t.get_cycle(), t.get_freq(), _temp_mot(i), _temp_dri(i),
+                  std::sqrt(t.win_sq/t.win_n), _status_period,
+                  _dropped ? fmt::format(" | DROPPED {} log samples", _dropped) : std::string());
+            t.win_sq = t.win_n = 0;
+        }
+        _next_status += _status_period;
     }
     if(!violation.empty())
     {
-        jinfo("SAFETY STOP trj_chirp: {}", violation);
+        jinfo("SAFETY STOP trj_chirp at t = {} s: {}", _elapsed, violation);
+        _stop_code = 3;
+        stop();
+        return;
+    }
+    if(!thermal.empty())
+    {
+        jinfo("THERMAL STOP trj_chirp at t = {} s: {}", _elapsed, thermal);
+        _stop_code = 1;
         stop();
         return;
     }
@@ -315,6 +391,8 @@ void ChirpTrajectoryPlugin::run()
         auto [q, v, a] = t.step(getPeriodSec());
 
         int jidx = _model->getDofIndex(j->get_name());
+        _cycle(jidx) = t.get_cycle();
+        _freq(jidx) = t.get_freq();
 
         if(_trj_out == Position)
         {
@@ -342,6 +420,8 @@ void ChirpTrajectoryPlugin::run()
         }
     }
 
+    _elapsed += dt;
+
     // publish progress
     if(_stop_time > 0)
     {
@@ -354,6 +434,7 @@ void ChirpTrajectoryPlugin::run()
     if(trj_ended)
     {
         jinfo("stopping after {} s", _stop_time);
+        _stop_code = 0;
 
         std_msgs::msg::Float32 msg;
         msg.data = 1.0;
@@ -370,7 +451,13 @@ void ChirpTrajectoryPlugin::run()
 
     // log data
 
-    _logger->add("q_ref", _q);
+    if(!_logger->add("q_ref", _q))
+    {
+        ++_dropped;   // producer_consumer 缓冲满时 add 返回 false
+    }
+    _logger->add("trajectory_time", trj_time);
+    _logger->add("cycle", _cycle);
+    _logger->add("freq", _freq);
     _logger->add("v_ref", _v_sent);   // 实际下发的速度参考，恒为 0
     _logger->add("v_traj", _v);       // 正弦的解析速度（未下发）
     _logger->add("a_ref", _a);
@@ -405,16 +492,29 @@ void ChirpTrajectoryPlugin::run()
 
 }
 
-void ChirpTrajectoryPlugin::on_stop()
+// 正常停止或异常退出：恢复参考滤波，写入停止原因，停掉写盘线程，销毁 logger 写出剩余数据。
+void ChirpTrajectoryPlugin::finish()
 {
     Hal::JointSafety::enable_filter(true, -1);
+    jinfo("trj_chirp finished: stop_code {} at t = {} s, {} log samples dropped", _stop_code, _elapsed, _dropped);
+    if(_logger)
+    {
+        _logger->add("stop_code", double(_stop_code));
+        _logger->add("stop_elapsed", _elapsed);
+        _logger->add("dropped_samples", double(_dropped));
+    }
+    _appender.reset();
     _logger.reset();
+}
+
+void ChirpTrajectoryPlugin::on_stop()
+{
+    finish();
 }
 
 void ChirpTrajectoryPlugin::on_abort()
 {
-    Hal::JointSafety::enable_filter(true, -1);
-    _logger.reset();
+    finish();
 }
 
 std::tuple<double, double, double> ChirpTrajectoryPlugin::Chirp::step(double dt)
