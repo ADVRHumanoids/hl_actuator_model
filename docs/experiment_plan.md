@@ -9,8 +9,13 @@ All numbers below are proposals to discuss; thresholds must be confirmed against
 
 ## Actuator data
 
-Motor datasheet (motor side), bus voltage 48 V, gear ratio 50 (output values below ignore gearbox efficiency,
+Motor datasheet (motor side), bus voltage 48 V, gear ratio 50 for the actuator on the bench now (output values below ignore gearbox efficiency,
 like the drive's current-based `tau_mot`):
+
+A second actuator with the same motor and ratio 20 will be tested later: output rated / peak 35.2 / 99 Nm,
+rated / no-load speed 14.8 / 22.9 rad/s, reflected rotor inertia 0.0086 kg m^2; switch `rated_torque` /
+`peak_torque` in the yaml accordingly.
+
 
 | | Motor | Output (x50) |
 |---|---|---|
