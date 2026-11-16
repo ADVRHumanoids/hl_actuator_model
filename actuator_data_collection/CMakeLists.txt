@@ -36,12 +36,22 @@ target_link_libraries(chirp_trajectory_plugin_haotian
     matlogger2::matlogger2
 )
 
+# trj_static：静态带载检查，依次移动到一组位置并保持；独立插件
+add_xbot2_plugin(static_hold_plugin_haotian src/static_hold_plugin.cpp)
+target_link_libraries(static_hold_plugin_haotian
+    PUBLIC
+    xbot2::xbot2_ros2_support
+    std_msgs::std_msgs__rosidl_typesupport_cpp
+    matlogger2::matlogger2
+)
+
 
 install(
     TARGETS
     data_collection_plugin_haotian
     policy_trajectory_plugin_haotian
     chirp_trajectory_plugin_haotian
+    static_hold_plugin_haotian
     DESTINATION lib
     )
 

@@ -113,6 +113,31 @@ xbotcore_plugins:
       stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定，同 trj_policy）；连续 0.5 s 达到就停（THERMAL STOP）。删掉这一行则不检查。
 
 
+  # 静态带载检查：依次平滑移动到 q0 + offsets[i]，每个位置保持 hold_time 并记录，全部测完回到 q0 后自动停止。
+  # 用 `run_trj.sh trj_static ...` 启动，不要和其他轨迹插件同时打开。从配重自然下垂的位置开始（分析时把 q0 当作重力矩为零的角度）。
+  trj_static:
+    type: static_hold_plugin_haotian
+    thread: rt_main
+    params:
+      joint: j_motor
+      # 相对 q0 的偏移 rad：先正向逐级抬起再放回，再反向；同一角度从两侧各到一次，能看出静摩擦造成的滞回。可在线调。
+      offsets: [0.0, 0.3, 0.6, 0.9, 1.2, 0.9, 0.6, 0.3, 0.0, -0.3, -0.6, -0.9, -1.2, -0.9, -0.6, -0.3, 0.0]
+      hold_time: 8.0              # 每个位置保持 s，可在线调。
+      settle_time: 2.0            # 保持段开头不计入平均的时长 s（等振荡衰减）。
+      move_velocity: 0.3          # 移动段峰值速度 rad/s（五次多项式，起止平滑），可在线调。
+      min_move_time: 1.0          # 移动段最短时长 s。
+      velocity_feedforward: true  # 移动段下发解析速度作为速度参考（保持段为 0）；静态检查不涉及策略接口，用前馈跟踪更稳。
+      position_min: -1.5707963267948966   # 绝对位置限 rad；q0 + offsets 超出时拒绝启动。
+      position_max: 1.5707963267948966
+      max_velocity: 1.0           # 实测速度上限 rad/s，须大于 move_velocity。
+      max_link_torque: 30.0       # 输出端力矩阈值 N·m；配重 m*g*r 要明显小于它。
+      max_tracking_error: 0.3     # |q - q_ref| 阈值 rad。
+      stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定）；0 表示不检查。
+      disable_reference_filter: true
+      enable_log: true
+      log_file: /tmp/static_hold
+
+
 # global parameters
 xbotcore_param:
   /xbot/hal/joint_safety/filter_autostart: false

@@ -51,8 +51,8 @@ magnet flux and Kt down roughly 0.1 %/C, so the current-based `tau_mot` overesti
 
 1. Low-speed `trj` run, no load: `q_mot` and `q_link` must agree (output-referred) up to the transmission
    deflection; `v_mot` consistent with the derivative of `q_mot`.
-2. Static gravity test with a load: hold several angles (e.g. `trj_policy` with long dwell) and check
-   `tau_link ~ m g r sin(q - q0) + offset`. This validates the torque sensor, its sign and zero, and the
+2. Static gravity test with a load: `trj_static` holds a list of angles automatically (start with the load
+   hanging down), then `scripts/analyze_static.py` fits `tau_link ~ m g r sin(q - q0) + offset`. This validates the torque sensor, its sign and zero, and the
    encoder zero.
 3. A/B command-interface test, same parameters, small amplitude (0.3 rad):
    `trj` vs `trj_chirp`. If tracking error and `tau_mot` are the same, the drive ignores `vel_ref`.

@@ -1,6 +1,6 @@
 # hl_actuator_model
 
-本分支 `bench-test` 同时包含三个轨迹插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）。**同一时间只打开一个轨迹插件。**
+本分支 `bench-test` 同时包含四个插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）、`trj_static`（静态带载检查）。**同一时间只打开一个轨迹插件。**
 
 实验计划见 [docs/experiment_plan.md](docs/experiment_plan.md)。
 
@@ -45,6 +45,25 @@ g++ -std=c++17 -O2 -Wall -Wextra -pedantic actuator_data_collection/src/preview_
 ./preview_policy 0.3 0 0.05 50 > policy.csv   # 列：time,q_ref,segment,probe，1 ms 间隔
 ./preview_policy 0.3 0 0.05 50 1200 30 300 1000 > thermal.csv   # 插探测段
 ```
+
+## `trj_static`：静态带载检查（自动逐点）
+
+`static_hold_plugin_haotian`，独立插件。从启动位置 q0 出发，依次平滑移动到 `q0 + offsets[i]`，每个位置保持 `hold_time` 秒并记录，全部测完回到 q0 后自动停止，不用在 GUI 里手动换位置。
+
+```bash
+export ACTUATOR_ID=... LOAD_MASS=2.0 LOAD_RADIUS=0.30
+./run_trj.sh trj_static log_file=/tmp/static_m2          # 配重自然下垂时启动
+LOAD_MASS=0 LOAD_RADIUS=0 ./run_trj.sh trj_static log_file=/tmp/static_m0   # 空载（只有摆臂）
+```
+
+- 默认 `offsets`：0 → +0.3 → … → +1.2 → … → 0 → −0.3 → … → −1.2 → … → 0（17 个点，约 3 min）。同一角度从两侧各到一次，用来看静摩擦造成的滞回。可在线改，例如 `offsets=[0.0,0.5,1.0,0.5,0.0]`。
+- **从配重自然下垂的位置启动**：分析时把 q0 当作重力矩为零的角度，据此判断力矩传感器的方向。
+- 移动段是五次多项式，峰值速度 `move_velocity`（0.3 rad/s），起止速度和加速度为 0；保持段前 `settle_time`（2 s）不计入平均。
+- 每个点保持结束时打印 `point i done: q_link ..., tau_link ..., tau_mot ...`，现场就能看出力矩是否随角度按 sin 变化。
+- 安全检查与 `trj_policy` 相同（位置、速度、`max_link_torque` 30 N·m、跟踪误差、70 °C）；q0 + offsets 超出位置限时拒绝启动。配重的 m·g·r 要明显小于 `max_link_torque`。
+- 日志变量：与其他插件相同的实测量，加 `phase`（0 移动、1 稳定、2 保持）、`point`、`v_ref`、`cfg_offsets`、`cfg_initial_value` 和 `stop_code` 等。
+
+分析（Actuator_Net 仓库）：`python scripts/analyze_static.py <日志目录或文件> --out runs/static.png`，输出每个点的平均值、拟合的 `tau_link = A·sin(q − q0) + c`（A 的符号即力矩方向，c 即零偏）、建议的 `--torque_sign` / `--torque_offset`、`tau_link` 与 `tau_mot` 的比例、静摩擦、传动柔度；多个配重时还给出 A 对 m·g·r 的斜率（传感器比例）和截距（摆臂自重）。
 
 ## `trj_chirp`：不带速度参考的扫频正弦（试验中）
 
