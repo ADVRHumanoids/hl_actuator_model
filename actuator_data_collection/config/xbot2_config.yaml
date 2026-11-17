@@ -83,7 +83,10 @@ xbotcore_plugins:
       heat_duration: 300.0        # 两次探测之间的加热段时长 s。可在线调。
       probe_seed: 1000.0          # 探测段种子：每次探测的目标序列完全相同，用来比较不同温度下的响应。
       status_period: 10.0         # 每隔多少秒打印一次温度、tau_mot RMS 和超额定时间比例。
-      max_tracking_error: 0.3     # |q - 目标| 阈值 rad，含目标阶跃本身（最多 max_step）和跟踪滞后。
+      # |q - q_ref| 阈值 rad。驱动器 tau = 98.7*(q_ref - q) - 9.6*v（阻尼作用于实测速度，无速度前馈），
+      # 阶跃目标按 max_step*policy_rate_hz = 2.5 rad/s 爬升时，稳态滞后 (9.6*2.5 + 4.9 摩擦 + 1.2*2.5)/98.7 ≈ 0.32 rad，
+      # 带载再加 m*g*r/98.7（3.5 kg @ 0.3 m 约 0.1 rad）。原来的 0.3 让 2026-11-17 的 12 次 policy 全部在阶跃段停下。
+      max_tracking_error: 0.6
       disable_reference_filter: true  # 实验期间关闭 joint_safety 参考滤波，结束后恢复（与 trj 相同）。
       enable_log: true
       log_file: /tmp/policy_targets
