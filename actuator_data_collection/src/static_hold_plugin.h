@@ -36,6 +36,10 @@ private:
     int _idx = -1;
     std::string _joint_name, _log_file;
     std::vector<double> _offsets;
+    // mode: "static" 按 offsets 逐点测试后回到 q0；"goto" 平滑移动到绝对位置 target 后停住（不回 q0），
+    // 用来在测试前把关节放到指定角度（例如配重自然下垂的位置）。同一个插件类型在 yaml 里配两个实例。
+    bool _goto = false;
+    double _target = 0;
     // 安全阈值：位置限和前三项为 0 表示未配置，不能启动；stop_motor_temperature 为 0 表示不检查温度。
     double _q_min = 0, _q_max = 0, _max_velocity = 0, _max_link_torque = 0, _max_tracking_error = 0;
     double _stop_motor_temperature = 0, _hot_time = 0;

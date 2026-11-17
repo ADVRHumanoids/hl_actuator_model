@@ -119,6 +119,7 @@ xbotcore_plugins:
     type: static_hold_plugin_haotian
     thread: rt_main
     params:
+      mode: static
       joint: j_motor
       # 相对 q0 的偏移 rad：先正向逐级抬起再放回，再反向；同一角度从两侧各到一次，能看出静摩擦造成的滞回。可在线调。
       offsets: [0.0, 0.3, 0.6, 0.9, 1.2, 0.9, 0.6, 0.3, 0.0, -0.3, -0.6, -0.9, -1.2, -0.9, -0.6, -0.3, 0.0]
@@ -136,6 +137,31 @@ xbotcore_plugins:
       disable_reference_filter: true
       enable_log: true
       log_file: /tmp/static_hold
+
+  # 移动到指定绝对角度后停住（与 trj_static 同一插件类型，mode: goto）：测试前把关节放到配重自然下垂的位置。
+  # 用法：META=0 ./run_trj.sh goto target=<rad>。不要和其他轨迹插件同时打开。
+  goto:
+    type: static_hold_plugin_haotian
+    thread: rt_main
+    params:
+      mode: goto
+      joint: j_motor
+      target: 0.0                 # 目标绝对位置 rad（输出端），可在线调。
+      offsets: [0.0]              # goto 模式不用
+      hold_time: 1.0              # 到位后再保持 s，然后插件停止，参考留在 target。
+      settle_time: 0.5
+      move_velocity: 0.2          # 峰值速度 rad/s（五次多项式，起止平滑）。
+      min_move_time: 1.0
+      velocity_feedforward: true
+      position_min: -1.5707963267948966
+      position_max: 1.5707963267948966
+      max_velocity: 1.0
+      max_link_torque: 30.0
+      max_tracking_error: 0.3
+      stop_motor_temperature: 70.0
+      disable_reference_filter: true
+      enable_log: false
+      log_file: /tmp/goto
 
 
 # global parameters

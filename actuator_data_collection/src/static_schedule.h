@@ -10,7 +10,7 @@
 namespace actuator_collection {
 
 // 静态带载检查的位置序列：从 q0 出发，依次平滑移动到 q0 + offsets[i]，每个位置保持 hold_time，
-// 最后回到 q0。纯数学实现，离线测试和实时插件共用。
+// 最后回到 q0（return_to_start = false 时停在最后一个位置，用于"移动到指定角度"）。纯数学实现，离线测试和实时插件共用。
 // 移动用五次多项式（最小加加速度），起止速度、加速度都为 0；时长按峰值速度 move_velocity 计算，
 // 不短于 min_move_time。保持段的前 settle_time 秒标为 Settle（等振荡衰减），之后标为 Hold。
 struct StaticSchedule
@@ -21,6 +21,7 @@ struct StaticSchedule
     double settle_time = 2.0;      // 保持段开头不计入统计的时长 s。
     double move_velocity = 0.3;    // 移动段的峰值速度 rad/s。
     double min_move_time = 1.0;    // 移动段最短时长 s，小距离也不会太快。
+    bool return_to_start = true;   // 最后是否回到 q0。
 
     enum Phase { Move = 0, Settle = 1, Hold = 2 };
 
@@ -58,7 +59,8 @@ struct StaticSchedule
         };
         for(std::size_t i = 0; i < offsets.size(); ++i)
             add(initial_value + offsets[i], hold_time, int(i));
-        add(initial_value, 0.0, -1);
+        if(return_to_start)
+            add(initial_value, 0.0, -1);
         duration = t;
     }
 

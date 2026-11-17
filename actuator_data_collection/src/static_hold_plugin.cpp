@@ -11,6 +11,17 @@ bool StaticHoldPlugin::on_initialize()
     _progress_pub = _ros->advertise<std_msgs::msg::Float32>("progress", 1);
     getParam("~joint", _joint_name);
     getParam("~offsets", _offsets);
+    std::string mode = "static";
+    getParam("~mode", mode);
+    if(mode != "static" && mode != "goto") {
+        jinfo("{}: mode must be static or goto, got {}", getName(), mode);
+        return false;
+    }
+    _goto = mode == "goto";
+    if(_goto) {
+        getParam("~target", _target);
+        createTunableParam("~target", &_target, Validators::InRange(-6.3, 6.3), &_param_upd_queue);
+    }
     getParam("~hold_time", _schedule.hold_time);
     getParam("~settle_time", _schedule.settle_time);
     getParam("~move_velocity", _schedule.move_velocity);
@@ -67,7 +78,12 @@ void StaticHoldPlugin::on_start()
         throw std::invalid_argument(fmt::format("motor at {} C, not below stop_motor_temperature {} C",
                                                 _temp_mot(_idx), _stop_motor_temperature));
     // q0 来自关节现有位置参考。建议从配重自然下垂的位置开始，分析脚本把 q0 当作重力矩为零的角度来判断力矩方向。
+    if(_goto) {
+        if(!std::isfinite(_target)) throw std::invalid_argument("target is not finite");
+        _offsets = {_target - _joint->get_pos_ref()};
+    }
     _schedule.offsets = _offsets;
+    _schedule.return_to_start = !_goto;
     _schedule.initial_value = _joint->get_pos_ref();
     _schedule.build();  // 参数非法时在这里抛出
     const auto [lo, hi] = _schedule.range();
@@ -132,9 +148,13 @@ void StaticHoldPlugin::on_start()
     _dropped = 0;
     _stop_code = 4;
     _clock_start = std::chrono::steady_clock::now();
-    jinfo("static test on joint {}: q0 {}, {} positions, hold {} s (first {} s settling), {:.0f} s in total",
-          _joint_name, _schedule.initial_value, _offsets.size(), _schedule.hold_time, _schedule.settle_time,
-          _schedule.duration);
+    if(_goto)
+        jinfo("goto on joint {}: {} -> {} rad at up to {} rad/s, {:.1f} s", _joint_name, _schedule.initial_value,
+              _target, _schedule.move_velocity, _schedule.duration);
+    else
+        jinfo("static test on joint {}: q0 {}, {} positions, hold {} s (first {} s settling), {:.0f} s in total",
+              _joint_name, _schedule.initial_value, _offsets.size(), _schedule.hold_time, _schedule.settle_time,
+              _schedule.duration);
 }
 void StaticHoldPlugin::starting() { start_completed(); }
 
