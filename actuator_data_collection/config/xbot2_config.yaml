@@ -179,6 +179,8 @@ xbotcore_plugins:
     thread: rt_main
     params:
       joint: j_motor
+      # 可在启动命令里改（下次启动生效）：soak_time、tolerance、max_heat_time、max_torque、max_link_torque、torque_rate、kp、ki、kd、
+      # release_only、log_file；setpoint 运行中也可改。其余项（direction、drive_stiffness、max_position_drift 等）改 yaml 后重启 xbot2-core。
       setpoint: 50.0              # 目标电机温度 °C，运行中可改。
       tolerance: 1.0              # 进入 setpoint ± tolerance 开始计保温时间 °C。
       soak_time: 1800.0           # 保温 s；0 表示一直保温，直到 release。

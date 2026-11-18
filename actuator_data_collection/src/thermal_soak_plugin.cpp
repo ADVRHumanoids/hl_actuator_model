@@ -50,6 +50,13 @@ bool ThermalSoakPlugin::on_initialize()
     createTunableParam("~release", &_release, ParameterValidator<bool>(), &_live_queue);
     createTunableParam("~soak_time", &_ctrl.soak_time, Validators::InRange(0.0, 36000.0), &_param_upd_queue);
     createTunableParam("~max_torque", &_ctrl.max_torque, Validators::InRange(0.0, 300.0), &_param_upd_queue);
+    createTunableParam("~max_link_torque", &_max_link_torque, Validators::InRange(0.0, 300.0), &_param_upd_queue);
+    createTunableParam("~tolerance", &_ctrl.tolerance, Validators::InRange(0.1, 10.0), &_param_upd_queue);
+    createTunableParam("~max_heat_time", &_ctrl.max_heat_time, Validators::InRange(0.0, 36000.0), &_param_upd_queue);
+    createTunableParam("~torque_rate", &_ctrl.torque_rate, Validators::InRange(0.1, 20.0), &_param_upd_queue);
+    createTunableParam("~kp", &_ctrl.kp, Validators::InRange(0.0, 10.0), &_param_upd_queue);
+    createTunableParam("~ki", &_ctrl.ki, Validators::InRange(0.0, 1.0), &_param_upd_queue);
+    createTunableParam("~kd", &_ctrl.kd, Validators::InRange(0.0, 1000.0), &_param_upd_queue);
     createTunableParam("~release_only", &_release_only, ParameterValidator<bool>(), &_param_upd_queue);
     createTunableParam("~enable_log", &_enable_log, ParameterValidator<bool>(), &_param_upd_queue);
     createTunableParam("~log_file", &_log_file, ParameterValidator<std::string>(), &_param_upd_queue);
