@@ -18,8 +18,8 @@ DRY_RUN=1 ./run_trj.sh trj_chirp j_motor/amplitude=0.3 log_file=/tmp/x     # 只
 
 - 每次实验用新的 `log_file`；名字不要带点（`A0.1` 写成 `A010`），MatLogger2 只接受 `.mat` 或无扩展名。
 - `ACTUATOR_ID`、`LOAD_MASS`、`LOAD_RADIUS` 必填（不想写条件文件时设 `META=0`）。
-- 拷数据时把 `.mat`、`_meta.yaml` 和 `_hal.yaml` 一起拷走。
-- 启动时脚本把驱动器配置（默认是 `xbot2_config.yaml` 里 `ec_pos` 指向的 HAL 配置，含位置环增益）复制成 `<log_file>_hal.yaml`，meta 里记下原路径和 sha256；`HAL_CONFIG=<文件>` 覆盖路径，`ECAT_CONFIG=<文件>` 额外复制 repl 的配置为 `_ecat.yaml`。文件不存在时不启动。
+- 拷数据时把 `.mat`、`_meta.yaml` 和 `_hal*.yaml` 一起拷走。
+- 启动时脚本把驱动器配置（默认是 `xbot2_config.yaml` 里 `ec_pos` 指向的 HAL 配置，含位置环增益）复制成 `<log_file>_hal.yaml`，meta 里记下原路径和 sha256；`HAL_CONFIG=<文件>` 覆盖路径，`ECAT_CONFIG=<文件>` 额外复制 repl 的配置为 `_ecat.yaml`。文件不存在时不启动。HAL 配置里 `value: $PWD/...yaml` 引用的文件（位置环增益在 `joint_config/position.yaml`）也复制成 `<log_file>_hal_<名字>.yaml`，`$PWD` 按 HAL 配置所在目录展开；引用的文件不存在时只提示。
 - 温升实验加 `AMBIENT_TEMP`（环境温度 °C），写进条件文件。
 
 ## 策略式目标插件 `trj_policy`（试验中）

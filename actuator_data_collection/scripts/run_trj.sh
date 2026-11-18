@@ -100,6 +100,17 @@ if [[ $META != 0 ]]; then
             exit 1
         fi
     done
+    # HAL 配置里 `value: $PWD/...yaml` 引用的文件也复制成 <log_file>_hal_<名字>.yaml：
+    # 位置环增益在 config_ec_pos 引用的 joint_config/position.yaml 里。$PWD 按 HAL 配置所在目录展开。
+    hal_dir=$(cd "$(dirname "$HAL_CONFIG")" && pwd)
+    while IFS= read -r ref; do
+        ref=${ref//\$PWD/$hal_dir}
+        if [[ -f $ref ]]; then
+            snapshots+=("hal_$(basename "${ref%.yaml}"):$ref")
+        else
+            echo "注意：HAL 配置引用的 $ref 不存在，没有复制。" >&2
+        fi
+    done < <(sed -n 's/^[[:space:]]*value:[[:space:]]*\([^[:space:]]*\.yaml\).*/\1/p' "$HAL_CONFIG" | sort -u)
 fi
 
 run() {
