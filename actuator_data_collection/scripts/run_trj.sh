@@ -16,6 +16,11 @@
 #   必填 ACTUATOR_ID、LOAD_MASS（空载填 0）、LOAD_RADIUS（空载填 0）；
 #   选填 KP、KD（驱动器位置环增益）、AMBIENT_TEMP（环境温度 °C，温升实验要填）、NOTE（备注，如 "cold start"）。
 #   不想写条件文件时设 META=0。
+# 驱动器配置快照：启动时把 HAL 配置（含驱动器位置环增益）复制成 <log_file>_hal.yaml，
+#   meta 里记下原路径和 sha256，以后能核对每段数据当时用的增益。
+#   默认取 xbot2_config.yaml 里 hal 的 ec_pos 路径；可用 HAL_CONFIG=<文件> 覆盖。
+#   另有 ECAT_CONFIG=<文件>（如 repl 用的 ecat_config.yaml）时一起复制成 <log_file>_ecat.yaml。
+#   文件不存在时不启动。
 # 服务名和类型可用环境变量覆盖：XBOT_PARAM_SERVICE、XBOT_PARAM_SRV_TYPE。
 set -euo pipefail
 
@@ -75,6 +80,26 @@ if [[ $META != 0 ]]; then
         echo "$meta_file 已存在：每次实验请用新的 log_file，避免条件文件对错日志。" >&2
         exit 1
     fi
+
+    # 驱动器配置快照：先确认文件存在，电机动之前就报错。
+    repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
+    xbot_cfg="$repo_dir/actuator_data_collection/config/xbot2_config.yaml"
+    if [[ -z ${HAL_CONFIG:-} ]]; then
+        HAL_CONFIG=$(sed -n 's/^[[:space:]]*ec_pos:[[:space:]]*//p' "$xbot_cfg" 2>/dev/null | head -n 1)
+        HAL_CONFIG=${HAL_CONFIG%%#*}
+        HAL_CONFIG=${HAL_CONFIG%"${HAL_CONFIG##*[![:space:]]}"}
+    fi
+    snapshots=("hal:${HAL_CONFIG}")
+    if [[ -n ${ECAT_CONFIG:-} ]]; then
+        snapshots+=("ecat:${ECAT_CONFIG}")
+    fi
+    for s in "${snapshots[@]}"; do
+        src=${s#*:}
+        if [[ -z $src || ! -f $src ]]; then
+            echo "找不到驱动器配置文件（${s%%:*}）：'$src'。用 HAL_CONFIG=<文件> / ECAT_CONFIG=<文件> 指定，或 META=0 跳过。" >&2
+            exit 1
+        fi
+    done
 fi
 
 run() {
@@ -130,7 +155,23 @@ write_meta() {
         for e in "${entries[@]}"; do
             echo "  $(quote "${e%%: *}"): $(quote "${e#*: }")"
         done
+        echo "config_snapshots:"
+        for s in "${snapshots[@]}"; do
+            local kind=${s%%:*} src=${s#*:}
+            echo "  $kind:"
+            echo "    source: $(quote "$src")"
+            echo "    copy: $(quote "${log_file}_${kind}.yaml")"
+            echo "    sha256: $(quote "$(sha256sum "$src" | cut -d' ' -f1)")"
+        done
     }
+}
+
+# 把驱动器配置复制到日志旁边（和 .mat、_meta.yaml 一起拷走）。
+copy_snapshots() {
+    for s in "${snapshots[@]}"; do
+        local kind=${s%%:*} src=${s#*:}
+        run cp "$src" "${log_file}_${kind}.yaml"
+    done
 }
 
 # 启动前再确认一次：插件一启动电机就会动。
@@ -138,12 +179,13 @@ read -r -p "确认 homing 已完成，且 $plugin 以外的轨迹插件都已关
 if [[ $answer == y || $answer == Y ]]; then
     run xbot2 plugin switch "$plugin" 1
     if [[ $META != 0 ]]; then
+        copy_snapshots
         if [[ $DRY_RUN == 1 ]]; then
             echo "+ 写入 $meta_file："
             write_meta
         else
             write_meta > "$meta_file"
-            echo "实验条件已写入 $meta_file（和 .mat 一起拷走）"
+            echo "实验条件已写入 $meta_file，驱动器配置复制为 ${log_file}_*.yaml（和 .mat 一起拷走）"
         fi
     fi
     echo "已启动。中途停止：xbot2 plugin switch $plugin 0"
