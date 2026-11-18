@@ -1,6 +1,6 @@
 # hl_actuator_model
 
-本分支 `bench-test` 同时包含五个插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）、`trj_static`（静态带载检查）、`goto`（移动到指定角度）。**同一时间只打开一个轨迹插件。**
+本分支 `bench-test` 同时包含六个插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）、`trj_static`（静态带载检查）、`goto`（移动到指定角度）、`trj_heat`（pin 固定输出，温度 PID 堵转升温保温）。**同一时间只打开一个轨迹插件。**
 
 实验计划见 [docs/experiment_plan.md](docs/experiment_plan.md)。
 
@@ -75,6 +75,30 @@ META=0 ./run_trj.sh goto target=-0.25     # 例如移到 analyze_static.py 算�
 峰值速度 0.2 rad/s，起止平滑；到位保持 1 s 后插件停止，参考留在 `target`。安全检查与 `trj_static` 相同，`target` 超出位置限时拒绝启动。
 
 分析（Actuator_Net 仓库）：`python scripts/analyze_static.py <日志目录或文件> --out runs/static.png`，输出每个点的平均值、拟合的 `tau_link = A·sin(q − q_hang) + c`（q_hang 是下垂角度，A 的符号即力矩方向，c 即零偏）、移到下垂位置的 `goto` 命令、建议的 `--torque_sign` / `--torque_offset`、`tau_link` 与 `tau_mot` 的比例、静摩擦、传动柔度；多个配重时还给出 A 对 m·g·r 的斜率（传感器比例）和截距（摆臂自重）。
+
+## `trj_heat`：pin 固定输出，堵转升温并保温（试验中）
+
+带载测试前把电机加热到指定温度并维持一段时间，然后释放力矩，拔 pin 后马上测。控制逻辑在 `src/thermal_soak.h`（外层仓库 `tests/cpp/test_thermal_soak.cpp` 用两节点热模型做了闭环离线测试），插件在 `src/thermal_soak_plugin.cpp`。
+
+- 原理：输出端固定，位置模式下参考偏离固定位置 δ，堵转力矩 ≈ 驱动器刚度 98.7 N·m/rad × δ。温度 PID 输出 u ∈ [0, 1] 是加热功率比例，力矩 = `max_torque`·√u（铜损 ∝ 力矩²）。
+- 阶段：Heat（升温）→ Soak（进入 `setpoint ± tolerance` 后保温 `soak_time`）→ Release（力矩按 `torque_rate` 降到 0，参考回到固定位置）→ 打印 `trj_heat DONE`，插件自动停止。**看到 DONE 才能拔 pin。**
+- 安全：输出端离开固定位置超过 `max_position_drift`（pin 松了或没装）、速度、`|tau_link − torque_offset|`、电机 / 驱动器温度停机线、温度读数无效 → 先把参考设到当前位置（卸掉力矩）再停止。
+- 升温超时（`max_heat_time` 内没到设定温度，说明力矩不够）→ 自动释放，`stop_code` 5。
+- 加热功率：(力矩/50/Km)²，Km = 0.3634 N·m/√W。30 N·m ≈ 2.7 W，60 N·m ≈ 11 W，88 N·m（额定）≈ 23.5 W。默认 `max_torque: 30` 多半升不到 50 °C，确认力矩传感器、pin、减速器量程后再调（堵转建议不超过额定的 60–70 %，一两相电流集中，发热不均匀）。
+- 热源是绕组：电机温度维持在 setpoint 时，减速器的稳态温度更低。需要减速器温度时另用测温枪 / 热电偶读。
+
+```bash
+# 摆臂自然下垂，插 pin，然后
+./run_trj.sh trj_heat release_only=false setpoint=50 soak_time=1800 log_file=/tmp/heat_50C
+# 提前结束（会先释放力矩再停）
+ros2 service call /xbotcore/set_parameter_values xbot_msgs/srv/SetString "{request: {/trj_heat/release: true}}"
+# 运行中改设定温度
+ros2 service call /xbotcore/set_parameter_values xbot_msgs/srv/SetString "{request: {/trj_heat/setpoint: 55}}"
+# 被 plugin switch 0 等外部停止后参考还带偏移（结束时会打印 WARNING）：先释放，再拔 pin
+META=0 ./run_trj.sh trj_heat release_only=true
+```
+
+日志每 `log_period`（0.1 s）一行：`heat_phase`、`temp_mot`、`temp_dri`、`temp_filtered`、`setpoint`、`u`、`pid_p/i/d`、`torque_cmd`、`soak_elapsed`、`q_ref`、`q_link`、`q_mot`、`tau_link`、`tau_mot`，以及 `cfg_*`、`stop_code`。它不是训练数据，转换脚本会跳过。
 
 ## `trj_chirp`：不带速度参考的扫频正弦（试验中）
 

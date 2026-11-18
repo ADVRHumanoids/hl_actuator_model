@@ -45,6 +45,14 @@ target_link_libraries(static_hold_plugin_haotian
     matlogger2::matlogger2
 )
 
+# trj_heat：输出端用 pin 固定，温度 PID 调堵转力矩，把电机维持在设定温度一段时间；独立插件
+add_xbot2_plugin(thermal_soak_plugin_haotian src/thermal_soak_plugin.cpp)
+target_link_libraries(thermal_soak_plugin_haotian
+    PUBLIC
+    xbot2::xbot2_ros2_support
+    std_msgs::std_msgs__rosidl_typesupport_cpp
+    matlogger2::matlogger2
+)
 
 install(
     TARGETS
@@ -52,6 +60,7 @@ install(
     policy_trajectory_plugin_haotian
     chirp_trajectory_plugin_haotian
     static_hold_plugin_haotian
+    thermal_soak_plugin_haotian
     DESTINATION lib
     )
 

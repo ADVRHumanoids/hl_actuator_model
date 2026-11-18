@@ -166,6 +166,46 @@ xbotcore_plugins:
       enable_log: false
       log_file: /tmp/goto
 
+  # 升温保温：输出端用 pin 固定（建议摆臂自然下垂时插 pin），位置模式下让参考偏离固定位置产生堵转力矩，
+  # 温度 PID 调力矩（u = 加热功率比例，力矩 = max_torque·sqrt(u)），电机温度到 setpoint 后保温 soak_time，
+  # 然后力矩按 torque_rate 降到 0、参考回到固定位置，插件自动停止并打印 "trj_heat DONE"，这时才能拔 pin。
+  # 用法：./run_trj.sh trj_heat release_only=false setpoint=50 log_file=/tmp/heat_50C
+  # 提前结束（会先释放力矩）：ros2 service call /xbotcore/set_parameter_values xbot_msgs/srv/SetString "{request: {/trj_heat/release: true}}"
+  # 被外部停止（plugin switch 0、安全停机以外的情况）后参考可能还带偏移：先 ./run_trj.sh trj_heat release_only=true 释放，再拔 pin。
+  # 注意：加热源是绕组，电机温度维持在 setpoint 时减速器稳态温度更低（热量经过外壳散到空气），
+  # 减速器实际温度最好另用测温枪 / 热电偶读一下。
+  trj_heat:
+    type: thermal_soak_plugin_haotian
+    thread: rt_main
+    params:
+      joint: j_motor
+      setpoint: 50.0              # 目标电机温度 °C，运行中可改。
+      tolerance: 1.0              # 进入 setpoint ± tolerance 开始计保温时间 °C。
+      soak_time: 1800.0           # 保温 s；0 表示一直保温，直到 release。
+      max_heat_time: 1800.0       # 升温最长 s，超时说明力矩不够，自动释放（stop_code 5）；0 表示不限。
+      # 堵转力矩上限 N·m（输出端）。铜损 = (力矩/50/Km)²，Km = 0.3634：30 N·m 约 2.7 W，60 N·m 约 11 W，88 N·m（额定）约 23.5 W。
+      # 30 N·m 多半升不到 50 °C；确认力矩传感器、pin、减速器的量程后再往上调（堵转建议不超过额定的 60–70 %）。
+      max_torque: 30.0
+      direction: 1.0              # 力矩方向 +1 / -1。
+      drive_stiffness: 98.7       # 驱动器位置环刚度 N·m/rad（2026-11-17 无负载扫频拟合），力矩 → 参考偏移。
+      torque_rate: 2.0            # 力矩变化率上限 N·m/s，加载和释放都按它。
+      kp: 0.2                     # 温度 PID：u 每 °C（差 5 °C 时满功率）。
+      ki: 0.0003                  # 1/(°C·s)，积分时间约 kp/ki ≈ 11 min。
+      kd: 0.0
+      temperature_filter: 2.0     # 温度低通时间常数 s。
+      torque_offset: 1.6          # 力矩传感器零偏 N·m，只用于安全检查和打印。
+      max_link_torque: 40.0       # |tau_link - torque_offset| 阈值 N·m，必须大于 max_torque。
+      max_position_drift: 0.05    # 输出端离开固定位置的阈值 rad（pin 松了或没装）。
+      max_velocity: 0.5           # 实测速度阈值 rad/s。
+      stop_motor_temperature: 70.0  # 电机温度停机线 °C，setpoint + tolerance 必须低于它。
+      stop_driver_temperature: 0.0  # 驱动器温度停机线 °C，0 表示不检查。
+      release_only: false         # true：只把上次留下的参考偏移释放到 0，不加热。用完改回 false。
+      status_period: 10.0         # 状态行间隔 s。
+      log_period: 0.1             # 日志每行间隔 s（升温日志不是训练数据，不用 1 kHz）。
+      disable_reference_filter: true
+      enable_log: true
+      log_file: /tmp/heat
+
 
 # global parameters
 xbotcore_param:
