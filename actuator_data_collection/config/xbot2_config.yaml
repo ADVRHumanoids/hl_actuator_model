@@ -153,7 +153,7 @@ xbotcore_plugins:
       # 按 7 kg@0.3 m、幅值 0.26 rad、1 Hz 估计：水平静态力矩约 21 N·m，加惯性力约 28 N·m；
       # 静态跟踪误差 21/98.7 ≈ 0.22 rad，加摩擦和无速度前馈的滞后约 0.55 rad。
       max_velocity: 4.0
-      max_link_torque: 40.0
+      max_link_torque: 80.0       # 用户指定 80 N·m（为更重的配重留余量）。
       max_tracking_error: 1.0
       stop_motor_temperature: 70.0
 
