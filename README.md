@@ -1,6 +1,6 @@
 # hl_actuator_model
 
-本分支 `bench-test` 同时包含六个插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）、`trj_static`（静态带载检查）、`goto`（移动到指定角度）、`trj_heat`（pin 固定输出，温度 PID 堵转升温保温）。**同一时间只打开一个轨迹插件。**
+本分支 `bench-test` 同时包含六个插件，编译一次即可：`trj`（原有扫频，带速度参考）、`trj_chirp`（同样的扫频，速度参考置 0）、`trj_policy`（策略式目标）、`trj_static`（静态带载检查）、`goto`（移动到指定角度）、`trj_heat`（pin 固定输出，温度 PID 堵转升温保温），以及 `trj_horizontal`（`trj_chirp` 的水平扫频实例）。**同一时间只打开一个轨迹插件。**
 
 实验计划见 [docs/experiment_plan.md](docs/experiment_plan.md)。
 
@@ -75,6 +75,31 @@ META=0 ./run_trj.sh goto target=-0.25     # 例如移到 analyze_static.py 算�
 峰值速度 0.2 rad/s，起止平滑；到位保持 1 s 后插件停止，参考留在 `target`。安全检查与 `trj_static` 相同，`target` 超出位置限时拒绝启动。
 
 分析（Actuator_Net 仓库）：`python scripts/analyze_static.py <日志目录或文件> --out runs/static.png`，输出每个点的平均值、拟合的 `tau_link = A·sin(q − q_hang) + c`（q_hang 是下垂角度，A 的符号即力矩方向，c 即零偏）、移到下垂位置的 `goto` 命令、建议的 `--torque_sign` / `--torque_offset`、`tau_link` 与 `tau_mot` 的比例、静摩擦、传动柔度；多个配重时还给出 A 对 m·g·r 的斜率（传感器比例）和截距（摆臂自重）。
+
+## `trj_horizontal`：配重保持在水平位置附近小幅扫频（试验中）
+
+和 `trj_chirp` 同一个插件（`chirp_trajectory_plugin_haotian`），yaml 里多一个实例，用 `side` 选择水平位置在哪一侧。重力矩在水平位置最大，所以这个测试让执行器在大的静态负载上叠加小幅动态运动。
+
+1. 从当前位置（配重自然下垂）按五次多项式平滑移动到水平位置 `hang_position + side·π/2`，峰值速度 `transfer_velocity`（默认 0.3 rad/s，约 10 s）；
+2. 停稳 `settle_time`；
+3. 绕水平位置扫频 `stop_time` 秒，幅值 `j_motor/amplitude`（rad），频率在 `freq_min`–`freq_max` 之间往复；最后 `fade_time` 秒幅值平滑降到 0；
+4. 平滑回到起点，插件自动停止（`stop_code` 0）。
+
+```bash
+cd ~/xbot2_ws/src/hl_actuator_model/actuator_data_collection/scripts
+export ACTUATOR_ID=0 LOAD_MASS=7 LOAD_RADIUS=0.30 KP=98.7 KD=9.6
+META=0 ./run_trj.sh goto target=0.0                       # 先回到下垂位置
+./run_trj.sh trj_horizontal side=1  j_motor/amplitude=0.26 stop_time=60 log_file=/tmp/chirp_hpos_m7_A026   # 正方向水平，±15°
+./run_trj.sh trj_horizontal side=-1 j_motor/amplitude=0.17 stop_time=60 log_file=/tmp/chirp_hneg_m7_A017   # 负方向水平，±10°
+```
+
+- `side`：`1` 或 `-1`（`0` 等于普通的 `trj_chirp`，绕起点扫频）。哪边是左、哪边是右按台架安装看，第一次用小配重确认方向。
+- 幅值：10° = 0.17 rad，15° = 0.26 rad，20° = 0.35 rad。频率用 `j_motor/freq_min`、`j_motor/freq_max`，周期 `j_motor/period`。
+- 位置范围放大到 ±2.2 rad（约 ±126°）。启动时检查起点和 中心 ± 幅值 都在范围内，超出就拒绝启动；机械限位和 URDF 的关节限位也要允许。
+- 中途停止（`xbot2 plugin switch trj_horizontal 0` 或安全停机）时摆臂停在水平附近、仍然带着负载：用 `META=0 ./run_trj.sh goto target=0.0` 回到下垂（`goto` 的范围和跟踪误差已相应放宽）。
+- 日志里 `chirp_phase`：0 移到水平、1 停稳、2 扫频、3 回起点；`cfg_center`、`cfg_start`、`cfg_side` 记录中心和起点。过渡段也是有效的训练数据。
+- 文件名建议 `chirp_hpos_m7_A026` / `chirp_hneg_m7_A026`（`hpos`/`hneg` 是标签，`m7` 配重 kg，`A026` 幅值 0.26 rad），处理脚本能从文件名读出配重和幅值。
+- `trj_chirp` 本身不受影响：扫频计算移到 `src/chirp_schedule.h`，`fade_time = 0` 时与原来逐位相同（外层仓库 `tests/cpp/test_chirp_schedule.cpp`）。日志的 `trajectory_time` 改为插件启动后的时间，`side = 0` 时与原来相同。
 
 ## `trj_heat`：pin 固定输出，堵转升温并保温（试验中）
 

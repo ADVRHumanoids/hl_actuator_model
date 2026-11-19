@@ -8,6 +8,7 @@
 #include <xbot2/ros/ros2_support.h>
 #include <std_msgs/msg/float32.hpp>
 #include <cmath>
+#include "chirp_schedule.h"
 
 namespace XBot {
 
@@ -76,38 +77,20 @@ private:
     int _stop_code = 4;
     void finish();
 
-    struct Chirp
-    {
-        std::tuple<double, double, double> step(double dt);
+    // 扫频和过渡移动的计算在 chirp_schedule.h（可离线测试）。
+    using Chirp = actuator_collection::Chirp;
+    using Transfer = actuator_collection::Transfer;
 
-        void reset();
-
-        double get_time() const { return _time; }
-
-        double get_freq() const { return _freq_hz; }
-
-        // 第几个扫频周期（频率 freq_min → freq_max → freq_min 为一个周期），从 0 开始。
-        double get_cycle() const { return std::floor(_time/period); }
-
-        // 每个关节自己的统计：tau_mot 平方和、样本数（最近一个状态周期），温度超线持续时间。
-        double win_sq = 0, win_n = 0, hot_time = 0;
-
-        double warmup_time = 1.0;
-        double freq_min_hz = 0.1;
-        double freq_max_hz = 1.0;
-        double period = 5.0;
-        double amplitude = 0.0;
-        double phase_offset = 0.0;
-        double initial_value = 0.0;
-
-    private:
-
-        double _phase = 0;
-        double _freq_hz = 0;
-        double _time = 0;
-
-
-    };
+    // 水平扫频模式（side = +1 / -1）：起点 → 水平中心 hang_position + side·π/2（Approach）→ 停稳 settle_time（Settle）
+    // → 扫频 stop_time 秒，最后 fade_time 秒幅值衰减到 0（Sweep）→ 回到起点（Return）→ 自动停止。
+    // side = 0 时绕起点扫频，与原来的 trj_chirp 完全相同（settle_time、fade_time 默认 0）。
+    enum Stage { Approach = 0, Settle = 1, Sweep = 2, Return = 3 };
+    double _side = 0, _hang_position = 0, _transfer_velocity = 0.3, _min_transfer_time = 2.0;
+    double _settle_time = 0, _fade_time = 0;
+    int _stage = Sweep;
+    double _stage_time = 0, _approach_time = 0, _return_time = 0;
+    std::map<Hal::JointBase*, Transfer> _approach, _return;
+    Eigen::VectorXd _stage_log;
 
     CallbackQueue _param_upd_queue;
 

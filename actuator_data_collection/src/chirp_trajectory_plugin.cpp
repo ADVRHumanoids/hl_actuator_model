@@ -37,6 +37,13 @@ bool ChirpTrajectoryPlugin::on_initialize()
     getParam("~max_tracking_error", _max_tracking_error);
     getParam("~stop_motor_temperature", _stop_motor_temperature);  // 可选，yaml 里没有时为 0（不检查）
     getParam("~status_period", _status_period);                    // 可选，默认 10 s
+    // 水平扫频模式（可选，trj_horizontal 用）；yaml 里没有时 side = 0，与原来的 trj_chirp 相同。
+    getParam("~side", _side);
+    getParam("~hang_position", _hang_position);
+    getParam("~transfer_velocity", _transfer_velocity);
+    getParam("~min_transfer_time", _min_transfer_time);
+    getParam("~settle_time", _settle_time);
+    getParam("~fade_time", _fade_time);
 
     for(auto [jname, a] : amplitude)
     {
@@ -166,6 +173,13 @@ bool ChirpTrajectoryPlugin::on_initialize()
         ParameterValidator<std::vector<std::string>>(),
         &_param_upd_queue);
 
+    // 水平扫频模式的参数，下次启动生效。side 只能是 -1、0、+1（在 on_start 检查）。
+    createTunableParam("~side", &_side, Validators::InRange(-1.0, 1.0), &_param_upd_queue);
+    createTunableParam("~hang_position", &_hang_position, Validators::InRange(-3.2, 3.2), &_param_upd_queue);
+    createTunableParam("~transfer_velocity", &_transfer_velocity, Validators::InRange(0.01, 2.0), &_param_upd_queue);
+    createTunableParam("~settle_time", &_settle_time, Validators::InRange(0.0, 600.0), &_param_upd_queue);
+    createTunableParam("~fade_time", &_fade_time, Validators::InRange(0.0, 60.0), &_param_upd_queue);
+
     // set param with all supported joints
     setParam("~supported_joints", _enabled_joints);
 
@@ -209,6 +223,84 @@ void ChirpTrajectoryPlugin::on_start()
         _trj_out = Torque;
     }
 
+    // 先算起点、中心、过渡时长并做检查（可能 throw），通过后再建日志、切控制模式，失败时不改变台架状态。
+    if(_side != 0.0 && _side != 1.0 && _side != -1.0)
+    {
+        throw std::invalid_argument(fmt::format("side must be -1, 0 or 1, got {}", _side));
+    }
+    const bool horizontal = _side != 0.0;
+    if(horizontal && _trj_out != Position)
+    {
+        throw std::invalid_argument("side = +1/-1 (horizontal sweep) needs trj_out Position");
+    }
+    if(horizontal && _stop_time <= 0)
+    {
+        throw std::invalid_argument("side = +1/-1 needs stop_time > 0 (sweep duration before returning)");
+    }
+    for(double x : {_hang_position, _transfer_velocity, _min_transfer_time, _settle_time, _fade_time})
+    {
+        if(!std::isfinite(x)) throw std::invalid_argument("nonfinite horizontal-sweep parameter");
+    }
+    if(_transfer_velocity <= 0 || _settle_time < 0 || _fade_time < 0 || _min_transfer_time < 0)
+    {
+        throw std::invalid_argument("transfer_velocity must be > 0; settle_time, fade_time, min_transfer_time >= 0");
+    }
+    if(_stop_time > 0 && _fade_time >= _stop_time)
+    {
+        throw std::invalid_argument(fmt::format("fade_time {} must be shorter than stop_time {}", _fade_time, _stop_time));
+    }
+    _approach.clear();
+    _return.clear();
+    _approach_time = _return_time = 0;
+    for(auto& [j, t] : _trj_map)
+    {
+        j->sense();
+        t.reset();
+
+        auto it = std::find(_enabled_joints.begin(), _enabled_joints.end(), j->get_name());
+
+        if(it == _enabled_joints.end())
+        {
+            jinfo("joint {} not in enabled_joints list, setting amplitude to 0", j->get_name());
+            t.amplitude = 0.0;
+        }
+
+        const double start = j->get_pos_ref();
+        // 只移动有幅值的关节；水平中心 = 下垂角度 + side·π/2。
+        const double center = horizontal && t.amplitude != 0.0 ? _hang_position + _side*actuator_collection::kPi/2 : start;
+        if(!std::isfinite(start))
+        {
+            throw std::invalid_argument(fmt::format("joint {}: position reference is not finite", j->get_name()));
+        }
+        if(t.amplitude != 0.0 && _q_min < _q_max)
+        {
+            const double lo = std::min(start, center - std::abs(t.amplitude)), hi = std::max(start, center + std::abs(t.amplitude));
+            if(lo < _q_min || hi > _q_max)
+            {
+                throw std::invalid_argument(fmt::format("joint {}: motion [{:.3f}, {:.3f}] rad exceeds position limits [{}, {}]",
+                                                        j->get_name(), lo, hi, _q_min, _q_max));
+            }
+        }
+        const double T = Transfer::duration(center - start, _transfer_velocity, _min_transfer_time);
+        _approach[j] = Transfer{start, center, T};
+        _return[j] = Transfer{center, start, T};
+        _approach_time = std::max(_approach_time, T);
+        _return_time = std::max(_return_time, T);
+        t.initial_value = center;
+        t.fade_time = _fade_time;
+        t.duration = _stop_time;
+
+        jinfo("joint {}: start {:.4f} rad, sweep center {:.4f} rad, amplitude {} rad", j->get_name(), start, center, t.amplitude);
+        _q_cmd(_model->getDofIndex(j->get_name())) = start;
+    }
+    _stage = _approach_time > 0 ? Approach : (_settle_time > 0 ? Settle : Sweep);
+    _stage_time = 0;
+    if(horizontal)
+    {
+        jinfo("horizontal sweep (side {:+.0f}): move {:.1f} s, settle {} s, sweep {} s (fade {} s), return {:.1f} s",
+              _side, _approach_time, _settle_time, _stop_time, _fade_time, _return_time);
+    }
+
     if(_enable_log)
     {
         if(_log_file.empty())
@@ -243,7 +335,26 @@ void ChirpTrajectoryPlugin::on_start()
         _logger->create("temp_dri", nv);
         _logger->create("cycle", nv);            // 第几个扫频周期
         _logger->create("freq", nv);             // 当前频率 Hz
-        _logger->create("trajectory_time", 1);
+        _logger->create("trajectory_time", 1);   // 插件启动后的时间（含过渡和保持），每周期 + dt
+        _logger->create("chirp_phase", 1);       // 0 移到中心、1 停稳、2 扫频、3 回起点
+        _logger->create("cfg_center", nv);       // 每个关节的扫频中心
+        _logger->create("cfg_start", nv);        // 每个关节的起点
+        for(const auto& [name, value] : std::initializer_list<std::pair<const char*, double>>{
+                {"cfg_side", _side}, {"cfg_hang_position", _hang_position}, {"cfg_transfer_velocity", _transfer_velocity},
+                {"cfg_settle_time", _settle_time}, {"cfg_fade_time", _fade_time}, {"cfg_stop_time", _stop_time}})
+        {
+            _logger->create(name, 1);
+            _logger->add(name, value);
+        }
+        Eigen::VectorXd center = _q_cmd, start = _q_cmd;
+        for(auto& [j, t] : _trj_map)
+        {
+            const int i = _model->getDofIndex(j->get_name());
+            center(i) = _approach.at(j).to;
+            start(i) = _approach.at(j).from;
+        }
+        _logger->add("cfg_center", center);
+        _logger->add("cfg_start", start);
         for(const auto& name : {"stop_code", "stop_elapsed", "dropped_samples"})
         {
             _logger->create(name, 1);            // 结束时各写一次
@@ -257,21 +368,6 @@ void ChirpTrajectoryPlugin::on_start()
 
     for(auto& [j, t] : _trj_map)
     {
-        j->sense();
-        t.reset();
-        t.initial_value = j->get_pos_ref();
-
-        jinfo("initial value for joint {} set to {}", j->get_name(), t.initial_value);
-        _q_cmd(_model->getDofIndex(j->get_name())) = t.initial_value;
-
-        auto it = std::find(_enabled_joints.begin(), _enabled_joints.end(), j->get_name());
-
-        if(it == _enabled_joints.end())
-        {
-            jinfo("joint {} not in enabled_joints list, setting amplitude to 0", j->get_name());
-            t.amplitude = 0.0;
-        }
-
         std::map<std::string, ControlMode> ctrl_map;
         ctrl_map[j->get_name()] = _trj_out == Position ? ControlMode::Position() : ControlMode::Effort();
         
@@ -382,17 +478,40 @@ void ChirpTrajectoryPlugin::run()
         return;
     }
 
-    // execute trajectories
-    bool trj_ended = false;
+    // execute trajectories：按阶段给出参考。side = 0 时一直是 Sweep，与原来的 trj_chirp 相同。
+    bool trj_ended = false, done = false;
     double trj_time = 0;
+    const int stage_cmd = _stage;   // 本周期参考所属的阶段（记入日志）
+    _stage_time += dt;
 
     for(auto& [j, t] : _trj_map)
     {
-        auto [q, v, a] = t.step(getPeriodSec());
-
         int jidx = _model->getDofIndex(j->get_name());
+        double q = 0, v = 0, a = 0;
+        if(_stage == Approach)
+        {
+            std::tie(q, v) = _approach.at(j).at(_stage_time);
+        }
+        else if(_stage == Settle)
+        {
+            q = _approach.at(j).to;
+        }
+        else if(_stage == Sweep)
+        {
+            std::tie(q, v, a) = t.step(dt);
+            trj_time = t.get_time();
+            if(_stop_time > 0 && trj_time > _stop_time)
+            {
+                trj_ended = true;
+            }
+        }
+        else
+        {
+            std::tie(q, v) = _return.at(j).at(_stage_time);
+        }
+
         _cycle(jidx) = t.get_cycle();
-        _freq(jidx) = t.get_freq();
+        _freq(jidx) = _stage == Sweep ? t.get_freq() : 0.0;
 
         if(_trj_out == Position)
         {
@@ -411,29 +530,58 @@ void ChirpTrajectoryPlugin::run()
         }
 
         j->move();
-
-        trj_time = t.get_time();
-
-        if(_stop_time > 0 && trj_time > _stop_time)
-        {
-            trj_ended = true;
-        }
     }
 
     _elapsed += dt;
+
+    // 阶段切换（在下一周期生效）
+    if(_stage == Approach && _stage_time >= _approach_time)
+    {
+        _stage = Settle;
+        _stage_time = 0;
+        jinfo("t {:.1f} s: at the sweep center, settling {} s", _elapsed, _settle_time);
+    }
+    if(_stage == Settle && _stage_time >= _settle_time)
+    {
+        _stage = Sweep;
+        _stage_time = 0;
+        jinfo("t {:.1f} s: sweep starts ({} s)", _elapsed, _stop_time);
+    }
+    if(trj_ended)
+    {
+        if(_side != 0.0)
+        {
+            // 从最后下发的参考平滑回到起点（有 fade_time 时最后的参考就是中心）
+            for(auto& [j, t] : _trj_map)
+            {
+                _return.at(j).from = _q_cmd(_model->getDofIndex(j->get_name()));
+            }
+            _stage = Return;
+            _stage_time = 0;
+            jinfo("t {:.1f} s: sweep finished after {} s, returning to the start ({:.1f} s)", _elapsed, _stop_time, _return_time);
+        }
+        else
+        {
+            done = true;
+        }
+    }
+    if(_stage == Return && _stage_time >= _return_time)
+    {
+        done = true;
+    }
 
     // publish progress
     if(_stop_time > 0)
     {
         std_msgs::msg::Float32 msg;
-        msg.data = trj_time/_stop_time;
+        msg.data = _stage == Sweep ? trj_time/_stop_time : (_stage == Return ? 1.0 : 0.0);
         _progress_pub->publish(msg);
     }
 
     // stop if needed
-    if(trj_ended)
+    if(done)
     {
-        jinfo("stopping after {} s", _stop_time);
+        jinfo(_side != 0.0 ? "back at the start, stopping" : "stopping after {} s", _stop_time);
         _stop_code = 0;
 
         std_msgs::msg::Float32 msg;
@@ -455,7 +603,8 @@ void ChirpTrajectoryPlugin::run()
     {
         ++_dropped;   // producer_consumer 缓冲满时 add 返回 false
     }
-    _logger->add("trajectory_time", trj_time);
+    _logger->add("trajectory_time", _elapsed);   // 原来记扫频时间；side = 0 时两者相同
+    _logger->add("chirp_phase", double(stage_cmd));
     _logger->add("cycle", _cycle);
     _logger->add("freq", _freq);
     _logger->add("v_ref", _v_sent);   // 实际下发的速度参考，恒为 0
@@ -515,41 +664,6 @@ void ChirpTrajectoryPlugin::on_stop()
 void ChirpTrajectoryPlugin::on_abort()
 {
     finish();
-}
-
-std::tuple<double, double, double> ChirpTrajectoryPlugin::Chirp::step(double dt)
-{
-    double dt_scaling = 1.0;
-    double dt_scaling_der = 0;
-
-    if(_time <= warmup_time)
-    {
-        double tau = _time/warmup_time;
-        dt_scaling = ((6*tau - 15)*tau + 10)*tau*tau*tau;
-    }
-
-    _freq_hz = freq_min_hz + (1 - std::cos(2*M_PI/period*_time))/2.0*(freq_max_hz - freq_min_hz);
-
-    _phase += _freq_hz*2*M_PI*dt_scaling*dt;
-
-    _time += dt;
-
-    double qref = initial_value + amplitude*std::sin(dt_scaling*phase_offset + _phase);
-
-    double vref = amplitude*std::cos(dt_scaling*phase_offset + _phase)*(_freq_hz*2*M_PI*dt_scaling);
-
-    double dfreq = std::sin(2*M_PI/period*_time)*(freq_max_hz - freq_min_hz)*M_PI/period;
-
-    double aref = amplitude*std::cos(dt_scaling*phase_offset + _phase)*(dfreq*2*M_PI*dt_scaling) +
-                  -amplitude*std::pow(_freq_hz*2*M_PI*dt_scaling, 2)*std::sin(dt_scaling*phase_offset + _phase);
-
-    return {qref, vref, aref};
-}
-
-void ChirpTrajectoryPlugin::Chirp::reset()
-{
-    _phase = 0;
-    _time = 0;
 }
 
 XBOT2_REGISTER_PLUGIN(ChirpTrajectoryPlugin, chirp_trajectory_plugin_haotian)
