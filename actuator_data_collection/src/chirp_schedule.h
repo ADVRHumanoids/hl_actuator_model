@@ -120,5 +120,28 @@ struct Transfer
     }
 };
 
+// 停稳阶段的中心修正：驱动器只有 PD 位置环（无积分），水平位置托住配重时实际角度比参考差
+// 重力矩 / Kp（7 kg@0.3 m 约 0.22 rad）再加静摩擦。这里用实测角度慢慢积分出参考偏移，
+// 直到实际角度在 tolerance 内保持 hold_time，扫频就绕"修正后的参考"进行，实际中心在水平位置。
+struct CenterCorrector
+{
+    double gain = 0.5;          // 1/s：参考偏移的变化率 = gain × 误差
+    double tolerance = 0.01;    // rad
+    double hold_time = 1.0;     // 误差连续在 tolerance 内多久算到位 s
+    double max_offset = 0.6;    // |参考偏移| 上限 rad
+
+    double offset = 0, within = 0;
+
+    void reset() { offset = within = 0; }
+
+    // error = 目标中心 − 实测角度；返回是否已到位。
+    bool step(double error, double dt)
+    {
+        offset = std::clamp(offset + gain*error*dt, -max_offset, max_offset);
+        within = std::abs(error) <= tolerance ? within + dt : 0.0;
+        return within >= hold_time;
+    }
+};
+
 }  // namespace actuator_collection
 #endif

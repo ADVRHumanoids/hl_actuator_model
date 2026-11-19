@@ -44,6 +44,12 @@ bool ChirpTrajectoryPlugin::on_initialize()
     getParam("~min_transfer_time", _min_transfer_time);
     getParam("~settle_time", _settle_time);
     getParam("~fade_time", _fade_time);
+    getParam("~center_correction", _center_correction);
+    getParam("~correction_gain", _correction_gain);
+    getParam("~correction_tolerance", _correction_tolerance);
+    getParam("~correction_hold", _correction_hold);
+    getParam("~max_correction", _max_correction);
+    getParam("~max_settle_time", _max_settle_time);
 
     for(auto [jname, a] : amplitude)
     {
@@ -179,6 +185,11 @@ bool ChirpTrajectoryPlugin::on_initialize()
     createTunableParam("~transfer_velocity", &_transfer_velocity, Validators::InRange(0.01, 2.0), &_param_upd_queue);
     createTunableParam("~settle_time", &_settle_time, Validators::InRange(0.0, 600.0), &_param_upd_queue);
     createTunableParam("~fade_time", &_fade_time, Validators::InRange(0.0, 60.0), &_param_upd_queue);
+    createTunableParam("~center_correction", &_center_correction, ParameterValidator<bool>(), &_param_upd_queue);
+    createTunableParam("~correction_gain", &_correction_gain, Validators::InRange(0.01, 5.0), &_param_upd_queue);
+    createTunableParam("~correction_tolerance", &_correction_tolerance, Validators::InRange(0.001, 0.2), &_param_upd_queue);
+    createTunableParam("~max_correction", &_max_correction, Validators::InRange(0.0, 1.5), &_param_upd_queue);
+    createTunableParam("~max_settle_time", &_max_settle_time, Validators::InRange(0.0, 600.0), &_param_upd_queue);
 
     // set param with all supported joints
     setParam("~supported_joints", _enabled_joints);
@@ -201,8 +212,10 @@ bool ChirpTrajectoryPlugin::on_initialize()
     _model->getJointVelocity(_tau_mot);
     _model->getJointVelocity(_cycle);
     _model->getJointVelocity(_freq);
+    _model->getJointVelocity(_offset_log);
     _cycle.setZero();
     _freq.setZero();
+    _offset_log.setZero();
 
     return true;
 
@@ -237,7 +250,8 @@ void ChirpTrajectoryPlugin::on_start()
     {
         throw std::invalid_argument("side = +1/-1 needs stop_time > 0 (sweep duration before returning)");
     }
-    for(double x : {_hang_position, _transfer_velocity, _min_transfer_time, _settle_time, _fade_time})
+    for(double x : {_hang_position, _transfer_velocity, _min_transfer_time, _settle_time, _fade_time,
+                     _correction_gain, _correction_tolerance, _correction_hold, _max_correction, _max_settle_time})
     {
         if(!std::isfinite(x)) throw std::invalid_argument("nonfinite horizontal-sweep parameter");
     }
@@ -249,8 +263,15 @@ void ChirpTrajectoryPlugin::on_start()
     {
         throw std::invalid_argument(fmt::format("fade_time {} must be shorter than stop_time {}", _fade_time, _stop_time));
     }
+    if(_correction_gain <= 0 || _correction_tolerance <= 0 || _correction_hold < 0 || _max_correction < 0 ||
+       _max_settle_time < _settle_time)
+    {
+        throw std::invalid_argument("center correction: gain, tolerance > 0; hold, max_correction >= 0; max_settle_time >= settle_time");
+    }
     _approach.clear();
     _return.clear();
+    _corr.clear();
+    _offset_log.setZero();
     _approach_time = _return_time = 0;
     for(auto& [j, t] : _trj_map)
     {
@@ -283,6 +304,19 @@ void ChirpTrajectoryPlugin::on_start()
         }
         const double T = Transfer::duration(center - start, _transfer_velocity, _min_transfer_time);
         _approach[j] = Transfer{start, center, T};
+        CenterCorrector c;
+        c.gain = _correction_gain;
+        c.tolerance = _correction_tolerance;
+        c.hold_time = _correction_hold;
+        c.max_offset = _max_correction;
+        _corr[j] = c;
+        // 修正后扫频中心可能偏离 center 最多 max_correction：一起检查位置范围
+        if(horizontal && _center_correction && t.amplitude != 0.0 && _q_min < _q_max &&
+           (center - std::abs(t.amplitude) - _max_correction < _q_min || center + std::abs(t.amplitude) + _max_correction > _q_max))
+        {
+            jinfo("note: joint {}: center +- (amplitude + max_correction) reaches outside [{}, {}]; the position check stops the run "
+                  "if the corrected reference gets there", j->get_name(), _q_min, _q_max);
+        }
         _return[j] = Transfer{center, start, T};
         _approach_time = std::max(_approach_time, T);
         _return_time = std::max(_return_time, T);
@@ -339,6 +373,7 @@ void ChirpTrajectoryPlugin::on_start()
         _logger->create("chirp_phase", 1);       // 0 移到中心、1 停稳、2 扫频、3 回起点
         _logger->create("cfg_center", nv);       // 每个关节的扫频中心
         _logger->create("cfg_start", nv);        // 每个关节的起点
+        _logger->create("center_offset", nv);    // 停稳阶段的参考修正 rad（扫频绕 中心 + 修正 进行）
         for(const auto& [name, value] : std::initializer_list<std::pair<const char*, double>>{
                 {"cfg_side", _side}, {"cfg_hang_position", _hang_position}, {"cfg_transfer_velocity", _transfer_velocity},
                 {"cfg_settle_time", _settle_time}, {"cfg_fade_time", _fade_time}, {"cfg_stop_time", _stop_time}})
@@ -483,6 +518,8 @@ void ChirpTrajectoryPlugin::run()
     double trj_time = 0;
     const int stage_cmd = _stage;   // 本周期参考所属的阶段（记入日志）
     _stage_time += dt;
+    const bool correcting = _side != 0.0 && _center_correction;
+    bool settled = true;
 
     for(auto& [j, t] : _trj_map)
     {
@@ -494,7 +531,13 @@ void ChirpTrajectoryPlugin::run()
         }
         else if(_stage == Settle)
         {
-            q = _approach.at(j).to;
+            auto& c = _corr.at(j);
+            if(correcting && t.amplitude != 0.0)
+            {
+                settled = c.step(_approach.at(j).to - _q_meas(jidx), dt) && settled;
+            }
+            q = _approach.at(j).to + c.offset;
+            _offset_log(jidx) = c.offset;
         }
         else if(_stage == Sweep)
         {
@@ -541,8 +584,20 @@ void ChirpTrajectoryPlugin::run()
         _stage_time = 0;
         jinfo("t {:.1f} s: at the sweep center, settling {} s", _elapsed, _settle_time);
     }
-    if(_stage == Settle && _stage_time >= _settle_time)
+    if(_stage == Settle && _stage_time >= _settle_time && (!correcting || settled || _stage_time >= _max_settle_time))
     {
+        for(auto& [j, t] : _trj_map)
+        {
+            const int i = _model->getDofIndex(j->get_name());
+            const double center = _approach.at(j).to, offset = _corr.at(j).offset;
+            t.initial_value = center + offset;   // 扫频绕修正后的参考进行，实际中心在水平位置
+            if(correcting && t.amplitude != 0.0)
+            {
+                jinfo("t {:.1f} s: {} {} at {:.4f} rad (target {:.4f}, error {:.4f} rad = {:.1f} deg), reference offset {:.3f} rad (~{:.1f} Nm at 98.7 Nm/rad)",
+                      _elapsed, j->get_name(), settled ? "settled" : "NOT settled within max_settle_time,", _q_meas(i), center,
+                      center - _q_meas(i), (center - _q_meas(i))*180/actuator_collection::kPi, offset, offset*98.7);
+            }
+        }
         _stage = Sweep;
         _stage_time = 0;
         jinfo("t {:.1f} s: sweep starts ({} s)", _elapsed, _stop_time);
@@ -605,6 +660,7 @@ void ChirpTrajectoryPlugin::run()
     }
     _logger->add("trajectory_time", _elapsed);   // 原来记扫频时间；side = 0 时两者相同
     _logger->add("chirp_phase", double(stage_cmd));
+    _logger->add("center_offset", _offset_log);
     _logger->add("cycle", _cycle);
     _logger->add("freq", _freq);
     _logger->add("v_ref", _v_sent);   // 实际下发的速度参考，恒为 0

@@ -116,8 +116,8 @@ xbotcore_plugins:
       stop_motor_temperature: 70.0  # 电机温度停机线 °C（暂定，同 trj_policy）；连续 0.5 s 达到就停（THERMAL STOP）。删掉这一行则不检查。
 
 
-  # 水平小幅扫频（与 trj_chirp 同一插件类型，side = ±1）：从当前位置平滑移到水平位置 hang_position + side·π/2，
-  # 停稳 settle_time，绕水平位置扫频 stop_time 秒（最后 fade_time 秒幅值平滑降到 0），再平滑回到起点，自动停止。
+  # 水平小幅扫频（与 trj_chirp 同一插件类型，side = ±1）：从当前位置（homing，垂直向下）平滑移到水平位置 hang_position + side·π/2，
+  # 停稳并修正到实际水平，绕水平位置扫频 stop_time 秒（最后 fade_time 秒幅值平滑降到 0），再平滑回到起点，自动停止。
   # 用法：./run_trj.sh trj_horizontal side=1 j_motor/amplitude=0.26 stop_time=60 log_file=/tmp/chirp_hpos_m7_A026
   # side 和幅值、频率、时长都在启动命令里改；不要和其他轨迹插件同时打开。从配重自然下垂的位置启动。
   trj_horizontal:
@@ -133,7 +133,14 @@ xbotcore_plugins:
       period: 10.0                # 频率 freq_min → freq_max → freq_min 一个来回的时长 s。
       stop_time: 60.0             # 扫频时长 s（不含过渡和停稳），必须 > 0。
       fade_time: 3.0              # 扫频最后几秒幅值平滑降到 0，回到中心再返回起点。
-      settle_time: 3.0            # 到水平位置后先停稳 s。
+      settle_time: 3.0            # 到水平位置后至少停稳 s。
+      # 中心修正：驱动器位置环没有积分，水平托住配重时实际角度比参考差 重力矩/Kp + 静摩擦（7 kg 约 12–20°）。
+      # 停稳阶段按实测角度积分出参考偏移，实际角度在 correction_tolerance 内保持 1 s 后才开始扫频，扫频绕修正后的参考进行。
+      center_correction: true
+      correction_gain: 0.5        # 1/s，7 kg 约 8 s 到位（离线模型）；台架上抖动就调小。
+      correction_tolerance: 0.01  # rad（约 0.6°）
+      max_correction: 0.6         # 参考偏移上限 rad
+      max_settle_time: 30.0       # 到时还没到位也开始扫频（打印 NOT settled）
       transfer_velocity: 0.3      # 起点 ↔ 水平位置移动的峰值速度 rad/s（五次多项式），约 10 s。
       min_transfer_time: 2.0
       enable_log: true

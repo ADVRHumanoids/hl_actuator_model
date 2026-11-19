@@ -81,8 +81,8 @@ META=0 ./run_trj.sh goto target=-0.25     # 例如移到 analyze_static.py 算�
 和 `trj_chirp` 同一个插件（`chirp_trajectory_plugin_haotian`），yaml 里多一个实例，用 `side` 选择水平位置在哪一侧。重力矩在水平位置最大，所以这个测试让执行器在大的静态负载上叠加小幅动态运动。
 
 1. 从当前位置（配重自然下垂）按五次多项式平滑移动到水平位置 `hang_position + side·π/2`，峰值速度 `transfer_velocity`（默认 0.3 rad/s，约 10 s）；
-2. 停稳 `settle_time`；
-3. 绕水平位置扫频 `stop_time` 秒，幅值 `j_motor/amplitude`（rad），频率在 `freq_min`–`freq_max` 之间往复；最后 `fade_time` 秒幅值平滑降到 0；
+2. 停稳并修正中心：驱动器位置环没有积分，水平托住配重时实际角度会比参考差 重力矩/Kp + 静摩擦（7 kg 约 12–20°）。停稳阶段按编码器实测角度慢慢积分出参考偏移（`correction_gain`），实际角度在 `correction_tolerance`（0.01 rad）内保持 1 s 后才开始扫频，终端打印到位角度和偏移；`max_settle_time`（30 s）内没到位也开始，并打印 `NOT settled`。`center_correction=false` 关掉；
+3. 绕修正后的参考扫频 `stop_time` 秒（实际中心在水平位置），幅值 `j_motor/amplitude`（rad），频率在 `freq_min`–`freq_max` 之间往复；最后 `fade_time` 秒幅值平滑降到 0；
 4. 平滑回到起点，插件自动停止（`stop_code` 0）。
 
 ```bash
@@ -97,7 +97,7 @@ META=0 ./run_trj.sh goto target=0.0                       # 先回到下垂位�
 - 幅值：10° = 0.17 rad，15° = 0.26 rad，20° = 0.35 rad。频率用 `j_motor/freq_min`、`j_motor/freq_max`，周期 `j_motor/period`。
 - 位置范围放大到 ±2.2 rad（约 ±126°）。启动时检查起点和 中心 ± 幅值 都在范围内，超出就拒绝启动；机械限位和 URDF 的关节限位也要允许。
 - 中途停止（`xbot2 plugin switch trj_horizontal 0` 或安全停机）时摆臂停在水平附近、仍然带着负载：用 `META=0 ./run_trj.sh goto target=0.0` 回到下垂（`goto` 的范围和跟踪误差已相应放宽）。
-- 日志里 `chirp_phase`：0 移到水平、1 停稳、2 扫频、3 回起点；`cfg_center`、`cfg_start`、`cfg_side` 记录中心和起点。过渡段也是有效的训练数据。
+- 日志里 `chirp_phase`：0 移到水平、1 停稳、2 扫频、3 回起点；`center_offset` 是参考修正量，`cfg_center`、`cfg_start`、`cfg_side` 记录中心和起点。过渡段也是有效的训练数据。
 - 文件名建议 `chirp_hpos_m7_A026` / `chirp_hneg_m7_A026`（`hpos`/`hneg` 是标签，`m7` 配重 kg，`A026` 幅值 0.26 rad），处理脚本能从文件名读出配重和幅值。
 - `trj_chirp` 本身不受影响：扫频计算移到 `src/chirp_schedule.h`，`fade_time = 0` 时与原来逐位相同（外层仓库 `tests/cpp/test_chirp_schedule.cpp`）。日志的 `trajectory_time` 改为插件启动后的时间，`side = 0` 时与原来相同。
 

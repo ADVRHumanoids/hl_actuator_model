@@ -90,6 +90,13 @@ private:
     int _stage = Sweep;
     double _stage_time = 0, _approach_time = 0, _return_time = 0;
     std::map<Hal::JointBase*, Transfer> _approach, _return;
+    // 停稳阶段按实测角度修正参考（驱动器无积分，水平托住配重时实际角度会差 重力矩/Kp），到位后才开始扫频。
+    using CenterCorrector = actuator_collection::CenterCorrector;
+    bool _center_correction = true;
+    double _correction_gain = 0.5, _correction_tolerance = 0.01, _correction_hold = 1.0, _max_correction = 0.6;
+    double _max_settle_time = 30.0;
+    std::map<Hal::JointBase*, CenterCorrector> _corr;
+    Eigen::VectorXd _offset_log;
     Eigen::VectorXd _stage_log;
 
     CallbackQueue _param_upd_queue;
