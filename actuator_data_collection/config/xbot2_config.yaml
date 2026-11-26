@@ -139,7 +139,7 @@ xbotcore_plugins:
       center_correction: true
       correction_gain: 0.5        # 1/s，7 kg 约 8 s 到位（离线模型）；台架上抖动就调小。
       correction_tolerance: 0.01  # rad（约 0.6°）
-      max_correction: 0.6         # 参考偏移上限 rad
+      max_correction: 1.0         # 参考偏移上限 rad；1 m 摆臂托举 40–70 N·m 时偏移 0.5–0.9 rad（11-23），顶到它时 max_hold_torque 检查会停止
       max_settle_time: 30.0       # 到时还没到位也开始扫频（打印 NOT settled）
       # 扫频中继续慢速修正中心：停稳得到的偏移含单向静摩擦，扫频时平均角度会偏 0.07–0.14 rad（11-23 日志）。
       # (中心 − 实测角度) 先按最低扫频频率的周期低通（freq_min 0.1 Hz → 10 s），再以此增益积分进偏移；0 关闭。
