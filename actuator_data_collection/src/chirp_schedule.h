@@ -143,5 +143,29 @@ struct CenterCorrector
     }
 };
 
+// 扫频阶段的慢速中心跟踪：停稳阶段积分出的偏移里含有单向的静摩擦，扫频时摩擦正负抵消，
+// 实际平均角度会偏离中心（11-23 日志中 0.07–0.14 rad）；饱和时上下不对称也会让平均角度漂走。
+// 这里把 (中心 − 实测角度) 先低通（时间常数 filter_time，取最低扫频频率的周期，滤掉扫频本身），
+// 再以很小的增益积分进参考偏移。低通 + 积分的闭环：ζ = 1/(2·sqrt(filter_time·gain))，
+// gain ≤ 0.5/filter_time 时不超调（filter_time 10 s 时 gain ≤ 0.05）。gain = 0 关闭。
+struct SweepCenterTracker
+{
+    double gain = 0.0;          // 1/s
+    double filter_time = 10.0;  // s
+    double max_offset = 0.6;    // 与停稳阶段共用的 |参考偏移| 上限 rad
+
+    double filtered = 0;
+
+    void reset(double error) { filtered = error; }
+
+    // error = 目标中心 − 实测角度；返回更新后的参考偏移。
+    double step(double offset, double error, double dt)
+    {
+        if(gain <= 0) return offset;
+        filtered += (error - filtered)*std::min(1.0, dt/filter_time);
+        return std::clamp(offset + gain*filtered*dt, -max_offset, max_offset);
+    }
+};
+
 }  // namespace actuator_collection
 #endif

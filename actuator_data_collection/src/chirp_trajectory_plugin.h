@@ -73,7 +73,8 @@ private:
     // 只在 yaml 里写了这一项时生效；status_period 秒打印一次状态行。
     double _stop_motor_temperature = 0, _status_period = 10, _next_status = 0, _elapsed = 0;
     Eigen::VectorXd _temp_mot, _temp_dri, _tau_mot, _cycle, _freq;
-    // 停止原因，写进日志 stop_code：0 跑完；1 电机温度；3 安全检查；4 外部停止或中止（与 trj_policy 相同）。
+    // 停止原因，写进日志 stop_code：0 跑完；1 电机温度；3 安全检查；4 外部停止或中止（与 trj_policy 相同）；
+    // 5 力矩余量不足，没有扫频就回到起点（只在水平模式）。
     int _stop_code = 4;
     void finish();
 
@@ -96,6 +97,15 @@ private:
     double _correction_gain = 0.5, _correction_tolerance = 0.01, _correction_hold = 1.0, _max_correction = 0.6;
     double _max_settle_time = 30.0;
     std::map<Hal::JointBase*, CenterCorrector> _corr;
+    // 扫频阶段继续慢速修正中心（sweep_correction_gain，0 关闭），见 chirp_schedule.h 的 SweepCenterTracker。
+    using SweepCenterTracker = actuator_collection::SweepCenterTracker;
+    double _sweep_correction_gain = 0.0;
+    std::map<Hal::JointBase*, SweepCenterTracker> _sweep_track;
+    // 开始扫频前的力矩余量检查：停稳末尾的托举力矩 |tau_link| > max_hold_torque（0 不检查），或参考偏移已顶到
+    // max_correction，就不扫频，直接平滑回起点并以 stop_code 5 结束（驱动器约 80–85 N·m 饱和，余量不够扫频时关节不动）。
+    double _max_hold_torque = 0.0;
+    Eigen::VectorXd _hold_tau;              // 停稳阶段 tau_link 的滑动平均（时间常数 0.5 s）
+    int _end_code = 0;                      // 回到起点后写入的 stop_code：0 正常，5 余量不足未扫频
     Eigen::VectorXd _offset_log;
     Eigen::VectorXd _stage_log;
 

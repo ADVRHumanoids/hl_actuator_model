@@ -50,6 +50,8 @@ bool ChirpTrajectoryPlugin::on_initialize()
     getParam("~correction_hold", _correction_hold);
     getParam("~max_correction", _max_correction);
     getParam("~max_settle_time", _max_settle_time);
+    getParam("~sweep_correction_gain", _sweep_correction_gain);   // 可选，默认 0（扫频中不修正）
+    getParam("~max_hold_torque", _max_hold_torque);               // 可选，默认 0（不检查）
 
     for(auto [jname, a] : amplitude)
     {
@@ -190,6 +192,8 @@ bool ChirpTrajectoryPlugin::on_initialize()
     createTunableParam("~correction_tolerance", &_correction_tolerance, Validators::InRange(0.001, 0.2), &_param_upd_queue);
     createTunableParam("~max_correction", &_max_correction, Validators::InRange(0.0, 1.5), &_param_upd_queue);
     createTunableParam("~max_settle_time", &_max_settle_time, Validators::InRange(0.0, 600.0), &_param_upd_queue);
+    createTunableParam("~sweep_correction_gain", &_sweep_correction_gain, Validators::InRange(0.0, 1.0), &_param_upd_queue);
+    createTunableParam("~max_hold_torque", &_max_hold_torque, Validators::InRange(0.0, 300.0), &_param_upd_queue);
 
     // set param with all supported joints
     setParam("~supported_joints", _enabled_joints);
@@ -213,9 +217,11 @@ bool ChirpTrajectoryPlugin::on_initialize()
     _model->getJointVelocity(_cycle);
     _model->getJointVelocity(_freq);
     _model->getJointVelocity(_offset_log);
+    _model->getJointVelocity(_hold_tau);
     _cycle.setZero();
     _freq.setZero();
     _offset_log.setZero();
+    _hold_tau.setZero();
 
     return true;
 
@@ -251,7 +257,8 @@ void ChirpTrajectoryPlugin::on_start()
         throw std::invalid_argument("side = +1/-1 needs stop_time > 0 (sweep duration before returning)");
     }
     for(double x : {_hang_position, _transfer_velocity, _min_transfer_time, _settle_time, _fade_time,
-                     _correction_gain, _correction_tolerance, _correction_hold, _max_correction, _max_settle_time})
+                     _correction_gain, _correction_tolerance, _correction_hold, _max_correction, _max_settle_time,
+                     _sweep_correction_gain, _max_hold_torque})
     {
         if(!std::isfinite(x)) throw std::invalid_argument("nonfinite horizontal-sweep parameter");
     }
@@ -268,10 +275,17 @@ void ChirpTrajectoryPlugin::on_start()
     {
         throw std::invalid_argument("center correction: gain, tolerance > 0; hold, max_correction >= 0; max_settle_time >= settle_time");
     }
+    if(_sweep_correction_gain < 0 || _max_hold_torque < 0)
+    {
+        throw std::invalid_argument("sweep_correction_gain and max_hold_torque must be >= 0");
+    }
     _approach.clear();
     _return.clear();
     _corr.clear();
+    _sweep_track.clear();
     _offset_log.setZero();
+    _hold_tau.setZero();
+    _end_code = 0;
     _approach_time = _return_time = 0;
     for(auto& [j, t] : _trj_map)
     {
@@ -310,6 +324,17 @@ void ChirpTrajectoryPlugin::on_start()
         c.hold_time = _correction_hold;
         c.max_offset = _max_correction;
         _corr[j] = c;
+        SweepCenterTracker s;
+        s.gain = _sweep_correction_gain;
+        // 低通时间常数 = 最低扫频频率的周期（滤掉扫频本身），至少 1 s
+        s.filter_time = std::max(1.0, t.freq_min_hz > 0 ? 1.0/t.freq_min_hz : t.period);
+        s.max_offset = _max_correction;
+        _sweep_track[j] = s;
+        if(horizontal && _center_correction && t.amplitude != 0.0 && s.gain > 0.5/s.filter_time)
+        {
+            jinfo("note: joint {}: sweep_correction_gain {} > 0.5/filter_time = {:.3f}; the center tracking may overshoot",
+                  j->get_name(), s.gain, 0.5/s.filter_time);
+        }
         // 修正后扫频中心可能偏离 center 最多 max_correction：一起检查位置范围
         if(horizontal && _center_correction && t.amplitude != 0.0 && _q_min < _q_max &&
            (center - std::abs(t.amplitude) - _max_correction < _q_min || center + std::abs(t.amplitude) + _max_correction > _q_max))
@@ -333,6 +358,12 @@ void ChirpTrajectoryPlugin::on_start()
     {
         jinfo("horizontal sweep (side {:+.0f}): move {:.1f} s, settle {} s, sweep {} s (fade {} s), return {:.1f} s",
               _side, _approach_time, _settle_time, _stop_time, _fade_time, _return_time);
+        jinfo("center correction {}, sweep_correction_gain {} 1/s, max_correction {} rad, max_hold_torque {} Nm (0 = no check)",
+              _center_correction ? "on" : "off", _sweep_correction_gain, _max_correction, _max_hold_torque);
+    }
+    else
+    {
+        jinfo("sweep around the start: stop_time {} s (0 = until stopped)", _stop_time);
     }
 
     if(_enable_log)
@@ -373,10 +404,12 @@ void ChirpTrajectoryPlugin::on_start()
         _logger->create("chirp_phase", 1);       // 0 移到中心、1 停稳、2 扫频、3 回起点
         _logger->create("cfg_center", nv);       // 每个关节的扫频中心
         _logger->create("cfg_start", nv);        // 每个关节的起点
-        _logger->create("center_offset", nv);    // 停稳阶段的参考修正 rad（扫频绕 中心 + 修正 进行）
+        _logger->create("center_offset", nv);    // 参考修正 rad（停稳阶段积分，扫频阶段慢速跟踪；扫频绕 中心 + 修正 进行）
         for(const auto& [name, value] : std::initializer_list<std::pair<const char*, double>>{
                 {"cfg_side", _side}, {"cfg_hang_position", _hang_position}, {"cfg_transfer_velocity", _transfer_velocity},
-                {"cfg_settle_time", _settle_time}, {"cfg_fade_time", _fade_time}, {"cfg_stop_time", _stop_time}})
+                {"cfg_settle_time", _settle_time}, {"cfg_fade_time", _fade_time}, {"cfg_stop_time", _stop_time},
+                {"cfg_sweep_correction_gain", _sweep_correction_gain}, {"cfg_max_hold_torque", _max_hold_torque},
+                {"cfg_max_correction", _max_correction}})
         {
             _logger->create(name, 1);
             _logger->add(name, value);
@@ -490,9 +523,10 @@ void ChirpTrajectoryPlugin::run()
         {
             if(t.amplitude == 0.0 || t.win_n == 0) continue;
             const int i = _model->getDofIndex(j->get_name());
-            jinfo("t {:.0f} s | {} cycle {:.0f}, {:.2f} Hz | motor {:.1f} C, driver {:.1f} C | tau_mot rms {:.1f} Nm (last {:.0f} s){}",
+            jinfo("t {:.0f} s | {} cycle {:.0f}, {:.2f} Hz | motor {:.1f} C, driver {:.1f} C | tau_mot rms {:.1f} Nm (last {:.0f} s){}{}",
                   _elapsed, j->get_name(), t.get_cycle(), t.get_freq(), _temp_mot(i), _temp_dri(i),
                   std::sqrt(t.win_sq/t.win_n), _status_period,
+                  _side != 0.0 ? fmt::format(" | center offset {:+.3f} rad", _offset_log(i)) : std::string(),
                   _dropped ? fmt::format(" | DROPPED {} log samples", _dropped) : std::string());
             t.win_sq = t.win_n = 0;
         }
@@ -500,14 +534,14 @@ void ChirpTrajectoryPlugin::run()
     }
     if(!violation.empty())
     {
-        jinfo("SAFETY STOP trj_chirp at t = {} s: {}", _elapsed, violation);
+        jinfo("SAFETY STOP {} at t = {} s: {}", getName(), _elapsed, violation);
         _stop_code = 3;
         stop();
         return;
     }
     if(!thermal.empty())
     {
-        jinfo("THERMAL STOP trj_chirp at t = {} s: {}", _elapsed, thermal);
+        jinfo("THERMAL STOP {} at t = {} s: {}", getName(), _elapsed, thermal);
         _stop_code = 1;
         stop();
         return;
@@ -536,11 +570,24 @@ void ChirpTrajectoryPlugin::run()
             {
                 settled = c.step(_approach.at(j).to - _q_meas(jidx), dt) && settled;
             }
+            // 托举力矩的滑动平均（时间常数 0.5 s），扫频前的余量检查用
+            if(std::isfinite(_tau_meas(jidx)))
+            {
+                _hold_tau(jidx) += (_tau_meas(jidx) - _hold_tau(jidx))*std::min(1.0, dt/0.5);
+            }
             q = _approach.at(j).to + c.offset;
             _offset_log(jidx) = c.offset;
         }
         else if(_stage == Sweep)
         {
+            // 慢速中心跟踪：扫频中心 = 中心 + 偏移，偏移按低通后的 (中心 − 实测角度) 慢慢积分
+            if(correcting && t.amplitude != 0.0 && _sweep_correction_gain > 0)
+            {
+                auto& c = _corr.at(j);
+                c.offset = _sweep_track.at(j).step(c.offset, _approach.at(j).to - _q_meas(jidx), dt);
+                t.initial_value = _approach.at(j).to + c.offset;
+                _offset_log(jidx) = c.offset;
+            }
             std::tie(q, v, a) = t.step(dt);
             trj_time = t.get_time();
             if(_stop_time > 0 && trj_time > _stop_time)
@@ -586,21 +633,59 @@ void ChirpTrajectoryPlugin::run()
     }
     if(_stage == Settle && _stage_time >= _settle_time && (!correcting || settled || _stage_time >= _max_settle_time))
     {
+        std::string no_headroom;
         for(auto& [j, t] : _trj_map)
         {
             const int i = _model->getDofIndex(j->get_name());
             const double center = _approach.at(j).to, offset = _corr.at(j).offset;
             t.initial_value = center + offset;   // 扫频绕修正后的参考进行，实际中心在水平位置
-            if(correcting && t.amplitude != 0.0)
+            if(t.amplitude == 0.0)
+            {
+                continue;
+            }
+            const double hold = _hold_tau(i), peak = std::abs(hold) + 98.7*std::abs(t.amplitude);
+            if(correcting)
             {
                 jinfo("t {:.1f} s: {} {} at {:.4f} rad (target {:.4f}, error {:.4f} rad = {:.1f} deg), reference offset {:.3f} rad (~{:.1f} Nm at 98.7 Nm/rad)",
                       _elapsed, j->get_name(), settled ? "settled" : "NOT settled within max_settle_time,", _q_meas(i), center,
                       center - _q_meas(i), (center - _q_meas(i))*180/actuator_collection::kPi, offset, offset*98.7);
+                _sweep_track.at(j).reset(center - _q_meas(i));
+            }
+            // 驱动器约 80–85 N·m 饱和：托举力矩 + Kp·幅值 是关节不动时扫频要求的最大力矩
+            jinfo("t {:.1f} s: {} holding tau_link {:.1f} Nm; hold + 98.7 x amplitude = {:.1f} Nm (drive saturates around 80-85 Nm)",
+                  _elapsed, j->get_name(), hold, peak);
+            if(!no_headroom.empty())
+            {
+                continue;
+            }
+            if(_max_hold_torque > 0 && std::abs(hold) > _max_hold_torque)
+            {
+                no_headroom = fmt::format("{}: holding |tau_link| {:.1f} Nm > max_hold_torque {} Nm", j->get_name(), std::abs(hold), _max_hold_torque);
+            }
+            else if(_max_hold_torque > 0 && correcting && _max_correction > 0 && std::abs(offset) >= _max_correction - 1e-6)
+            {
+                no_headroom = fmt::format("{}: reference offset {:.3f} rad reached max_correction {} rad", j->get_name(), offset, _max_correction);
             }
         }
-        _stage = Sweep;
-        _stage_time = 0;
-        jinfo("t {:.1f} s: sweep starts ({} s)", _elapsed, _stop_time);
+        if(no_headroom.empty())
+        {
+            _stage = Sweep;
+            _stage_time = 0;
+            jinfo("t {:.1f} s: sweep starts ({} s)", _elapsed, _stop_time);
+        }
+        else
+        {
+            // 余量不够：不扫频，从当前参考平滑回起点，回到后以 stop_code 5 停止
+            for(auto& [j, t] : _trj_map)
+            {
+                _return.at(j).from = _q_cmd(_model->getDofIndex(j->get_name()));
+            }
+            _end_code = 5;
+            _stage = Return;
+            _stage_time = 0;
+            jinfo("NO TORQUE HEADROOM at t = {:.1f} s: {}; not sweeping, returning to the start ({:.1f} s). "
+                  "Use a lighter load / shorter radius or a center further below horizontal.", _elapsed, no_headroom, _return_time);
+        }
     }
     if(trj_ended)
     {
@@ -637,7 +722,7 @@ void ChirpTrajectoryPlugin::run()
     if(done)
     {
         jinfo(_side != 0.0 ? "back at the start, stopping" : "stopping after {} s", _stop_time);
-        _stop_code = 0;
+        _stop_code = _end_code;
 
         std_msgs::msg::Float32 msg;
         msg.data = 1.0;
@@ -701,7 +786,11 @@ void ChirpTrajectoryPlugin::run()
 void ChirpTrajectoryPlugin::finish()
 {
     Hal::JointSafety::enable_filter(true, -1);
-    jinfo("trj_chirp finished: stop_code {} at t = {} s, {} log samples dropped", _stop_code, _elapsed, _dropped);
+    // t 是插件启动后的总时间（水平模式含移动、停稳、返回），不是 stop_time。
+    static const char* reasons[] = {"finished normally", "THERMAL STOP", "?", "SAFETY STOP", "stopped externally (plugin switch 0 / XBot2 safety)",
+                                    "NO TORQUE HEADROOM, returned without sweeping"};
+    jinfo("{} finished: stop_code {} ({}) at t = {:.1f} s (stop_time {} s), {} log samples dropped", getName(), _stop_code,
+          _stop_code >= 0 && _stop_code <= 5 ? reasons[_stop_code] : "?", _elapsed, _stop_time, _dropped);
     if(_logger)
     {
         _logger->add("stop_code", double(_stop_code));

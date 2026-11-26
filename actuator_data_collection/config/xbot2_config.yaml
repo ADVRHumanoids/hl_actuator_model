@@ -141,6 +141,13 @@ xbotcore_plugins:
       correction_tolerance: 0.01  # rad（约 0.6°）
       max_correction: 0.6         # 参考偏移上限 rad
       max_settle_time: 30.0       # 到时还没到位也开始扫频（打印 NOT settled）
+      # 扫频中继续慢速修正中心：停稳得到的偏移含单向静摩擦，扫频时平均角度会偏 0.07–0.14 rad（11-23 日志）。
+      # (中心 − 实测角度) 先按最低扫频频率的周期低通（freq_min 0.1 Hz → 10 s），再以此增益积分进偏移；0 关闭。
+      # 不超调要求 gain ≤ 0.5 × freq_min（0.1 Hz 时 0.05）；0.03 约 1–2 分钟收敛。偏移仍受 max_correction 限制。
+      sweep_correction_gain: 0.03 # 1/s
+      # 扫频前的力矩余量检查（> 0 生效，0 不检查）：停稳末尾 |tau_link| 超过它，或参考偏移顶到 max_correction，
+      # 就不扫频、直接平滑回起点，stop_code 5。驱动器约 80–85 N·m 饱和，托举 77–82 N·m 时扫频关节完全不动（11-23 日志）。
+      max_hold_torque: 75.0       # N·m
       transfer_velocity: 0.3      # 起点 ↔ 水平位置移动的峰值速度 rad/s（五次多项式），约 10 s。
       min_transfer_time: 2.0
       enable_log: true

@@ -82,8 +82,9 @@ META=0 ./run_trj.sh goto target=-0.25     # 例如移到 analyze_static.py 算�
 
 1. 从当前位置（配重自然下垂）按五次多项式平滑移动到水平位置 `hang_position + side·π/2`，峰值速度 `transfer_velocity`（默认 0.3 rad/s，约 10 s）；
 2. 停稳并修正中心：驱动器位置环没有积分，水平托住配重时实际角度会比参考差 重力矩/Kp + 静摩擦（7 kg 约 12–20°）。停稳阶段按编码器实测角度慢慢积分出参考偏移（`correction_gain`），实际角度在 `correction_tolerance`（0.01 rad）内保持 1 s 后才开始扫频，终端打印到位角度和偏移；`max_settle_time`（30 s）内没到位也开始，并打印 `NOT settled`。`center_correction=false` 关掉；
-3. 绕修正后的参考扫频 `stop_time` 秒（实际中心在水平位置），幅值 `j_motor/amplitude`（rad），频率在 `freq_min`–`freq_max` 之间往复；最后 `fade_time` 秒幅值平滑降到 0；
-4. 平滑回到起点，插件自动停止（`stop_code` 0）。
+3. 扫频前检查力矩余量：停稳末尾 |tau_link|（0.5 s 滑动平均）超过 `max_hold_torque`（yaml 75 N·m，0 不检查），或参考偏移已顶到 `max_correction`，就不扫频，直接平滑回起点，`stop_code` 5，终端打印 `NO TORQUE HEADROOM`。驱动器约 80–85 N·m 饱和，11-23 托举 77–82 N·m 的 run 扫频时关节完全不动。每次都会打印托举力矩和 托举 + 98.7×幅值；
+4. 绕修正后的参考扫频 `stop_time` 秒（实际中心在水平位置），幅值 `j_motor/amplitude`（rad），频率在 `freq_min`–`freq_max` 之间往复；最后 `fade_time` 秒幅值平滑降到 0。扫频中继续慢速修正中心（`sweep_correction_gain`，yaml 0.03 1/s，0 关闭）：(中心 − 实测角度) 按最低扫频频率的周期低通后再积分，修正停稳偏移里单向静摩擦造成的平均角度偏差（11-23 为 0.07–0.14 rad），不吃掉扫频本身；增益不超过 0.5 × `freq_min` 时不超调。偏移记在日志 `center_offset`，状态行也打印；
+5. 平滑回到起点，插件自动停止（`stop_code` 0）。
 
 ```bash
 cd ~/xbot2_ws/src/hl_actuator_model/actuator_data_collection/scripts
